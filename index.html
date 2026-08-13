@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Media Watch">
+<meta name="theme-color" content="#0E1E24">
+<meta name="robots" content="noindex, nofollow">
+<title>Media Watch</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#0E1E24; --panel:#142A33; --panel2:#19343F; --line:#24454F;
+  --text:#DFE9E7; --mute:#7C9AA2; --amber:#E3A13C; --cyan:#63B6C6; --red:#D2705A;
+  --disp:'Barlow Condensed','Arial Narrow',Helvetica,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --body:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text); font-family:var(--body);
+  min-height:100dvh; -webkit-font-smoothing:antialiased;
+  overscroll-behavior-y:none;
+}
+#app{max-width:720px;margin:0 auto;padding-bottom:calc(40px + env(safe-area-inset-bottom))}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;padding:0;text-align:left}
+button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+a{color:inherit}
+.mono{font-family:var(--mono)}
+
+/* ---- header ---- */
+.head{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line);
+  padding-top:env(safe-area-inset-top)}
+.head-in{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:14px 16px 10px}
+h1{font-family:var(--disp);text-transform:uppercase;letter-spacing:.045em;font-weight:600;font-size:21px;margin:0}
+h1 span{color:var(--amber)}
+.dtg{font-family:var(--mono);font-size:10.5px;color:var(--mute);letter-spacing:.08em}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tab{flex:1;padding:12px 2px;font-family:var(--disp);text-transform:uppercase;letter-spacing:.11em;
+  font-size:13.5px;font-weight:600;color:var(--mute);border-bottom:2px solid transparent;
+  margin-bottom:-1px;text-align:center}
+.tab[data-on="1"]{color:var(--text);border-bottom-color:var(--amber)}
+.tab i{font-style:normal;font-size:10px;color:var(--amber);vertical-align:super;margin-left:3px}
+
+/* ---- alert ---- */
+.alert{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--panel2);
+  border-bottom:1px solid var(--line)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--amber);flex:none}
+.alert-t{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--amber);flex:1}
+.link{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);
+  border-bottom:1px solid var(--line);padding-bottom:1px;flex:none}
+.link[disabled]{opacity:.4}
+
+/* ---- scan bar ---- */
+.scan{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.sweep{flex:none;padding:11px 18px;background:var(--amber);color:#0E1E24;font-family:var(--disp);
+  text-transform:uppercase;letter-spacing:.1em;font-weight:700;font-size:14px}
+.sweep[disabled]{background:var(--line);color:var(--mute)}
+.scan-msg{font-size:11.5px;color:var(--mute);letter-spacing:.04em;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;flex:1}
+.prog{height:2px;background:var(--line);overflow:hidden}
+.prog i{display:block;height:100%;width:34%;background:var(--amber);animation:slide 1.15s linear infinite}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+
+/* ---- filters ---- */
+.filters{display:flex;gap:7px;padding:12px 16px;overflow-x:auto;border-bottom:1px solid var(--line);
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+.filters::-webkit-scrollbar{display:none}
+.chip{flex:none;padding:6px 12px;border:1px solid var(--line);font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--mute);font-family:var(--mono)}
+.chip[data-on="1"]{border-color:var(--cyan);color:var(--cyan)}
+
+/* ---- items ---- */
+.item{display:block;padding:15px 16px;border-bottom:1px solid var(--line);text-decoration:none;color:inherit}
+.item-top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.grade{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.16em;
+  padding:3px 7px 3px 9px;border:1px solid var(--line);color:var(--mute);flex:none}
+.grade[data-p="flash"]{background:var(--amber);border-color:var(--amber);color:#0E1E24}
+.grade[data-p="priority"]{border-color:var(--amber);color:var(--amber)}
+.stamp{font-family:var(--mono);font-size:10px;color:var(--mute);letter-spacing:.07em}
+.new{margin-left:auto;font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;color:var(--amber)}
+.hl{font-family:var(--disp);font-size:20px;font-weight:600;line-height:1.16;margin:0 0 7px}
+.sum{font-size:14px;line-height:1.5;color:#B9CBCB;margin:0 0 9px}
+.sum[data-raw="1"]{color:var(--mute);font-style:italic}
+.meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-family:var(--mono);font-size:10px;
+  letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
+.meta b{color:var(--cyan);font-weight:500}
+.meta em{color:var(--amber);font-style:normal}
+
+/* ---- sections ---- */
+.sec{padding:16px;border-bottom:1px solid var(--line)}
+.sec-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.sec-t{font-family:var(--disp);text-transform:uppercase;letter-spacing:.14em;font-size:13.5px;
+  color:var(--mute);font-weight:600}
+.row{display:flex;align-items:center;gap:11px;padding:11px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:none}
+.term{flex:1;font-size:14.5px;line-height:1.35;min-width:0;word-break:break-word}
+.term[data-off="1"]{color:var(--mute);text-decoration:line-through}
+.sub{font-family:var(--mono);font-size:10px;color:var(--mute);letter-spacing:.06em;margin-top:3px;
+  text-transform:uppercase}
+.bell{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;padding:4px 8px;
+  border:1px solid var(--line);color:var(--mute);flex:none}
+.bell[data-on="1"]{border-color:var(--amber);color:var(--amber)}
+.x{color:var(--mute);font-size:19px;line-height:1;padding:6px 4px;flex:none}
+.box{flex:none;width:17px;height:17px;border:1px solid var(--line);position:relative;background:none}
+.box[data-on="1"]{border-color:var(--amber);background:var(--amber)}
+.box[data-on="1"]::after{content:"";position:absolute;left:5px;top:1px;width:5px;height:10px;
+  border:solid #0E1E24;border-width:0 2px 2px 0;transform:rotate(43deg)}
+input,select{width:100%;padding:12px;background:var(--panel);border:1px solid var(--line);
+  color:var(--text);font-size:16px;border-radius:0;font-family:var(--body);-webkit-appearance:none}
+input.mono{font-family:var(--mono);font-size:16px}
+input::placeholder{color:var(--mute)}
+.add{display:flex;gap:8px;margin-top:10px}
+.addbtn{flex:none;padding:0 18px;border:1px solid var(--cyan);color:var(--cyan);font-family:var(--disp);
+  text-transform:uppercase;letter-spacing:.1em;font-size:14px;font-weight:600}
+.lbl{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--mute);margin:16px 0 6px}
+.hint{font-size:12px;color:var(--mute);line-height:1.55;margin-top:7px}
+.hint.warn{color:var(--amber)}
+
+.eng{display:flex;align-items:center;gap:9px;padding:10px 0;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:11.5px;letter-spacing:.07em}
+.eng span:first-child{flex:1;text-transform:uppercase}
+.st{text-transform:uppercase;font-size:10px;letter-spacing:.13em}
+.st[data-s="ok"]{color:var(--cyan)}
+.st[data-s="warn"]{color:var(--amber)}
+.st[data-s="bad"]{color:var(--red)}
+.st[data-s="idle"]{color:var(--mute)}
+
+.brief{padding:18px 16px;font-size:14.5px;line-height:1.62;white-space:pre-wrap}
+.empty{padding:46px 26px;text-align:center;color:var(--mute);font-size:14px;line-height:1.6}
+.empty b{display:block;font-family:var(--disp);text-transform:uppercase;letter-spacing:.13em;
+  font-size:15px;color:var(--text);margin-bottom:8px;font-weight:600}
+.err{margin:12px 16px;padding:11px 13px;border-left:2px solid var(--amber);background:var(--panel);
+  font-size:13px;color:#D8C4A0;line-height:1.5}
+.legend{padding:14px 16px 30px;font-family:var(--mono);font-size:10px;color:var(--mute);
+  letter-spacing:.06em;line-height:1.85}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}
+  .prog i{width:100%}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+"use strict";
+
+/* =================================================================
+   MEDIA WATCH  —  single-file build
+   Retrieval : GDELT DOC 2.0 + Google News RSS + direct outlet RSS
+   Summaries : free LLM tier, primary -> secondary automatic failover
+   Storage   : localStorage, on this device only
+   ================================================================= */
+
+/* ---------------------------- providers --------------------------- */
+
+var PROVIDERS = {
+  groq: {
+    label: "Groq",
+    note: "Llama 3.3 70B. Around 30 requests a minute. Does not train on what you send.",
+    hint: "gsk_…  from console.groq.com",
+    call: function (prompt, key) {
+      return fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile", temperature: 0.2, max_tokens: 1400,
+          messages: [{ role: "user", content: prompt }]
+        })
+      }).then(readOpenAI);
+    }
+  },
+  gemini: {
+    label: "Google Gemini",
+    note: "Flash-Lite. Largest free daily allowance. Google may use free-tier inputs to improve its models.",
+    hint: "AIza…  from aistudio.google.com",
+    call: function (prompt, key) {
+      return fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + encodeURIComponent(key), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 1400 }
+        })
+      }).then(function (r) {
+        if (r.status === 429) throw rateErr();
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).then(function (d) {
+        var c = d.candidates && d.candidates[0];
+        return ((c && c.content && c.content.parts) || []).map(function (p) { return p.text || ""; }).join("");
+      });
+    }
+  },
+  openrouter: {
+    label: "OpenRouter",
+    note: "Free model pool. Around 20 requests a minute. Useful as a third leg.",
+    hint: "sk-or-…  from openrouter.ai",
+    call: function (prompt, key) {
+      return fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
+        body: JSON.stringify({
+          model: "meta-llama/llama-3.3-70b-instruct:free", temperature: 0.2, max_tokens: 1400,
+          messages: [{ role: "user", content: prompt }]
+        })
+      }).then(readOpenAI);
+    }
+  }
+};
+function readOpenAI(r) {
+  if (r.status === 429) throw rateErr();
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json().then(function (d) {
+    return (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "";
+  });
+}
+function rateErr() { var e = new Error("rate limited"); e.rate = true; return e; }
+
+/* ---------------------------- sources ----------------------------- */
+
+var WIRE = ["reuters.com","apnews.com","afp.com","bloomberg.com","aljazeera.com"];
+var INDIAN = ["thehindu.com","indianexpress.com","hindustantimes.com","timesofindia","ptinews","aninews","theprint.in","economictimes","deccanherald"];
+var DEFENCE = ["janes.com","defensenews.com","breakingdefense.com","defenseone.com","idrw.org","livefistdefence.com","orfonline.org","idsa.in","warontherocks.com"];
+
+function classify(d) {
+  d = (d || "").toLowerCase();
+  if (WIRE.some(function (x) { return d.indexOf(x) > -1; })) return "wire";
+  if (INDIAN.some(function (x) { return d.indexOf(x) > -1; })) return "indian";
+  if (DEFENCE.some(function (x) { return d.indexOf(x) > -1; })) return "defence";
+  return "other";
+}
+var RANK = { wire: 0, indian: 1, defence: 1, other: 3 };
+var GRADES = { wire: "B2", indian: "B3", defence: "C3", other: "D4" };
+
+var DEFAULT_FEEDS = [
+  { id: "f1", name: "The Hindu — National", url: "https://www.thehindu.com/news/national/feeder/default.rss", on: true },
+  { id: "f2", name: "Indian Express — India", url: "https://indianexpress.com/section/india/feed/", on: true },
+  { id: "f3", name: "The Print", url: "https://theprint.in/feed/", on: true },
+  { id: "f4", name: "Hindustan Times — India", url: "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml", on: true },
+  { id: "f5", name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml", on: true },
+  { id: "f6", name: "ORF", url: "https://www.orfonline.org/feed", on: true },
+  { id: "f7", name: "Livefist Defence", url: "https://www.livefistdefence.com/feed", on: true },
+  { id: "f8", name: "IDRW", url: "https://idrw.org/feed/", on: true },
+  { id: "f9", name: "Breaking Defense", url: "https://breakingdefense.com/feed/", on: true }
+];
+
+var SEED = [
+  { term: "Indian Army operations", cat: "FORCE", alert: false },
+  { term: "LAC India China border", cat: "NORTHERN", alert: true },
+  { term: "Line of Control Pakistan", cat: "WESTERN", alert: true },
+  { term: "Indian defence procurement contract", cat: "PROCUREMENT", alert: false },
+  { term: "military satellite space surveillance", cat: "SPACE", alert: false },
+  { term: "artillery precision fires rocket", cat: "FIRES", alert: false }
+];
+
+var DEFAULT_PROXY = "https://api.allorigins.win/raw?url=";
+
+/* ---------------------------- utilities --------------------------- */
+
+var MON = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+function p2(n) { return String(n).padStart(2, "0"); }
+function dtg(d) {
+  if (!(d instanceof Date) || isNaN(d)) return "------Z";
+  return p2(d.getUTCDate()) + p2(d.getUTCHours()) + p2(d.getUTCMinutes()) + "Z " +
+         MON[d.getUTCMonth()] + " " + String(d.getUTCFullYear()).slice(2);
+}
+function dayStamp(iso) {
+  var d = new Date(iso);
+  if (isNaN(d)) return "DATE UNK";
+  return p2(d.getUTCDate()) + " " + MON[d.getUTCMonth()] + " " + String(d.getUTCFullYear()).slice(2);
+}
+function hash(s) {
+  var h = 5381;
+  for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return "x" + Math.abs(h).toString(36);
+}
+function domainOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return ""; } }
+function gdeltDay(s) {
+  if (!s || s.length < 8) return new Date().toISOString().slice(0, 10);
+  return s.slice(0, 4) + "-" + s.slice(4, 6) + "-" + s.slice(6, 8);
+}
+var GRADE_RE = /^[A-F][1-6]$/;
+function words(t) { return t.toLowerCase().split(/\s+/).filter(function (x) { return x.length > 4; }); }
+
+/* tiny DOM builder */
+function el(tag, attrs) {
+  var n = document.createElement(tag), i, k;
+  if (attrs) for (k in attrs) {
+    if (k === "text") n.textContent = attrs[k];
+    else if (k === "html") n.innerHTML = attrs[k];
+    else if (k === "on") for (var ev in attrs[k]) n.addEventListener(ev, attrs[k][ev]);
+    else if (attrs[k] !== null && attrs[k] !== undefined && attrs[k] !== false) n.setAttribute(k, attrs[k]);
+  }
+  for (i = 2; i < arguments.length; i++) {
+    var c = arguments[i];
+    if (c === null || c === undefined || c === false) continue;
+    if (Array.isArray(c)) c.forEach(function (x) { if (x) n.appendChild(x); });
+    else n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return n;
+}
+
+/* ---------------------------- state ------------------------------- */
+
+var S = {
+  tab: "feed", filter: "ALL",
+  watch: SEED.map(function (s) { return { id: hash(s.term), term: s.term, cat: s.cat, alert: s.alert, on: true }; }),
+  feeds: DEFAULT_FEEDS.slice(),
+  keys: { groq: "", gemini: "", openrouter: "" },
+  chain: ["groq", "gemini", "openrouter"],
+  proxy: DEFAULT_PROXY,
+  items: [], seen: [], lastScan: null, brief: "",
+  engine: {}, feedState: {},
+  scanning: false, briefing: false, status: "", err: ""
+};
+
+function load() {
+  try {
+    var cfg = JSON.parse(localStorage.getItem("mw:config") || "null");
+    if (cfg) {
+      if (cfg.watch && cfg.watch.length) S.watch = cfg.watch;
+      if (cfg.feeds && cfg.feeds.length) S.feeds = cfg.feeds;
+      if (cfg.keys) Object.assign(S.keys, cfg.keys);
+      if (cfg.chain && cfg.chain.length) S.chain = cfg.chain;
+      if (cfg.proxy) S.proxy = cfg.proxy;
+    }
+    var f = JSON.parse(localStorage.getItem("mw:feed") || "null");
+    if (f) {
+      S.items = f.items || []; S.seen = f.seen || [];
+      S.lastScan = f.lastScan || null; S.brief = f.brief || "";
+    }
+  } catch (e) { /* corrupt or unavailable storage — start clean */ }
+}
+function saveCfg() {
+  try {
+    localStorage.setItem("mw:config", JSON.stringify(
+      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, proxy: S.proxy }));
+  } catch (e) {}
+}
+function saveFeed() {
+  try {
+    localStorage.setItem("mw:feed", JSON.stringify(
+      { items: S.items, seen: S.seen, lastScan: S.lastScan, brief: S.brief }));
+  } catch (e) {}
+}
+
+/* ---------------------------- fetching ---------------------------- */
+
+function getText(url) {
+  return fetch(url).then(function (r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.text();
+  }).catch(function () {
+    return fetch(S.proxy + encodeURIComponent(url)).then(function (r) {
+      if (!r.ok) throw new Error("relay HTTP " + r.status);
+      return r.text();
+    });
+  });
+}
+
+function gdelt(term) {
+  var url = "https://api.gdeltproject.org/api/v2/doc/doc?query=" +
+    encodeURIComponent(term + " sourcelang:english") +
+    "&mode=ArtList&maxrecords=12&timespan=4d&sort=datedesc&format=json";
+  return getText(url).then(function (t) {
+    var data = JSON.parse(t);
+    return (data.articles || []).map(function (a) {
+      return { hl: a.title || "", url: a.url || "", src: a.domain || domainOf(a.url),
+               dt: gdeltDay(a.seendate), via: "GDELT" };
+    });
+  });
+}
+
+function parseRss(xml, defaultSrc) {
+  var doc = new DOMParser().parseFromString(xml, "text/xml");
+  if (doc.querySelector("parsererror")) throw new Error("bad feed XML");
+  var nodes = [].slice.call(doc.querySelectorAll("item, entry")).slice(0, 25);
+  return nodes.map(function (n) {
+    var linkEl = n.querySelector("link");
+    var url = ((linkEl && linkEl.textContent) || "").trim() ||
+              (linkEl && linkEl.getAttribute("href")) || "";
+    var titleEl = n.querySelector("title");
+    var hl = ((titleEl && titleEl.textContent) || "").trim();
+    var srcEl = n.querySelector("source");
+    var src = defaultSrc || ((srcEl && srcEl.textContent) || "").trim();
+    if (!defaultSrc) {
+      var m = hl.match(/^(.*)\s+-\s+([^-]{2,40})$/);
+      if (m) { hl = m[1].trim(); src = m[2].trim(); }
+    }
+    var pd = n.querySelector("pubDate"), up = n.querySelector("updated");
+    var raw = (pd && pd.textContent) || (up && up.textContent) || "";
+    var d = new Date(raw);
+    return { hl: hl, url: url, src: src || domainOf(url),
+             dt: isNaN(d) ? new Date().toISOString().slice(0, 10) : d.toISOString().slice(0, 10),
+             via: defaultSrc ? "RSS" : "GNEWS" };
+  });
+}
+
+function googleNews(term) {
+  var url = "https://news.google.com/rss/search?q=" +
+    encodeURIComponent(term + " when:4d") + "&hl=en-IN&gl=IN&ceid=IN:en";
+  return getText(url).then(function (t) { return parseRss(t, null); });
+}
+
+/* ------------------------- summarisation -------------------------- */
+
+function parseArray(raw) {
+  var clean = String(raw).replace(/```json/g, "").replace(/```/g, "").trim();
+  var a = clean.indexOf("["), b = clean.lastIndexOf("]");
+  if (a === -1 || b === -1) return [];
+  try { var o = JSON.parse(clean.slice(a, b + 1)); return Array.isArray(o) ? o : []; }
+  catch (e) { return []; }
+}
+
+function runChain(prompt) {
+  var i = 0, last = "no engine configured";
+  function next() {
+    if (i >= S.chain.length) return Promise.reject(new Error("All engines unavailable — " + last));
+    var p = S.chain[i++], def = PROVIDERS[p];
+    if (!def) return next();
+    if (!S.keys[p]) { S.engine[p] = "no key"; return next(); }
+    return def.call(prompt, S.keys[p]).then(function (out) {
+      S.engine[p] = "ok"; return out;
+    }).catch(function (e) {
+      S.engine[p] = e.rate ? "rate limited" : (e.message || "failed");
+      last = e.message || "failed";
+      return next();
+    });
+  }
+  return next();
+}
+
+/* ---------------------------- sweep ------------------------------- */
+
+function setStatus(t) {
+  S.status = t;
+  var n = document.getElementById("scanmsg");
+  if (n) n.textContent = t;
+}
+
+function sweep(onlyCat) {
+  var active = S.watch.filter(function (w) { return w.on && (!onlyCat || w.cat === onlyCat); });
+  if (!active.length) { S.err = "No active keywords. Add one in WATCH before sweeping."; render(); return; }
+
+  S.err = ""; S.scanning = true; S.tab = "feed"; S.engine = {}; S.feedState = {};
+  render();
+
+  var raw = [];
+  var liveFeeds = S.feeds.filter(function (f) { return f.on; });
+
+  /* 1. outlet feeds, once per sweep */
+  var chainP = liveFeeds.reduce(function (acc, f) {
+    return acc.then(function () {
+      setStatus("Reading " + f.name);
+      return getText(f.url).then(function (t) {
+        var arts = parseRss(t, f.name);
+        S.feedState[f.id] = arts.length + " items";
+        arts.forEach(function (a) { raw.push(a); });
+      }).catch(function () { S.feedState[f.id] = "unreachable"; });
+    });
+  }, Promise.resolve());
+
+  /* 2. GDELT + Google News per keyword */
+  active.forEach(function (t) {
+    chainP = chainP.then(function () {
+      setStatus("GDELT — " + t.term.slice(0, 30));
+      return gdelt(t.term).then(function (a) {
+        a.forEach(function (x) { x.cat = t.cat; raw.push(x); });
+      }).catch(function () {});
+    }).then(function () {
+      setStatus("Google News — " + t.term.slice(0, 26));
+      return googleNews(t.term).then(function (a) {
+        a.forEach(function (x) { x.cat = t.cat; raw.push(x); });
+      }).catch(function () {});
+    });
+  });
+
+  /* 3. tag, dedupe, rank */
+  chainP.then(function () {
+    var tagged = [];
+    raw.forEach(function (a) {
+      if (!a.hl || !a.url) return;
+      var cat = a.cat;
+      if (!cat) {
+        var blob = a.hl.toLowerCase();
+        var hit = active.find(function (w) {
+          return words(w.term).some(function (x) { return blob.indexOf(x) > -1; });
+        });
+        if (!hit) return;
+        cat = hit.cat;
+      }
+      var dom = a.src && a.src.indexOf(".") > -1 ? a.src : domainOf(a.url);
+      tagged.push({ id: hash(a.url), hl: a.hl.slice(0, 150), url: a.url,
+                    src: a.src || dom, dt: a.dt, via: a.via, cat: cat, typ: classify(dom) });
+    });
+
+    var map = {}, fresh = [];
+    tagged.forEach(function (a) { if (!map[a.id]) { map[a.id] = 1; fresh.push(a); } });
+    var known = {}; S.items.forEach(function (i) { known[i.id] = 1; });
+    fresh = fresh.filter(function (a) { return !known[a.id]; })
+      .sort(function (a, b) {
+        return (RANK[a.typ] - RANK[b.typ]) || String(b.dt).localeCompare(String(a.dt));
+      }).slice(0, 24);
+
+    if (!fresh.length) {
+      S.scanning = false; S.lastScan = new Date().toISOString(); setStatus("");
+      S.err = "Sweep finished but found nothing new. Widen a keyword, or check SETUP if every feed reads unreachable.";
+      saveFeed(); render(); return;
+    }
+
+    /* 4. summarise in batches of eight */
+    var batches = [], i;
+    for (i = 0; i < fresh.length; i += 8) batches.push(fresh.slice(i, i + 8));
+    var done = [];
+
+    var work = batches.reduce(function (acc, batch, bi) {
+      return acc.then(function () {
+        setStatus("Summarising batch " + (bi + 1) + " of " + batches.length);
+        var list = batch.map(function (a, n) { return (n + 1) + ". [" + a.src + "] " + a.hl; }).join("\n");
+        var prompt =
+"For each numbered news item below, write one summary line for a defence staff officer.\n\n" +
+"Return ONLY a JSON array, no prose and no code fences, one object per item in the same order:\n" +
+'[{"n":1,"sum":"what happened and why it matters, max 26 words","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
+'pri: "flash" only for a major breaking development, "priority" for significant, otherwise "routine".\n' +
+"grd: source reliability A-F then information credibility 1-6, judged from the outlet named in brackets.\n\n" +
+"ITEMS:\n" + list;
+        return runChain(prompt).then(function (out) {
+          var parsed = parseArray(out);
+          batch.forEach(function (a, n) {
+            var m = parsed.find(function (x) { return Number(x.n) === n + 1; }) || {};
+            var g = String(m.grd || "").toUpperCase();
+            done.push(Object.assign({}, a, {
+              sum: String(m.sum || "").slice(0, 260),
+              pri: ["flash","priority","routine"].indexOf(m.pri) > -1 ? m.pri : "routine",
+              grd: GRADE_RE.test(g) ? g : GRADES[a.typ]
+            }));
+          });
+        }).catch(function (e) {
+          S.err = e.message + "  Headlines were still collected — add or check a key in SETUP, then sweep again.";
+          batch.forEach(function (a) {
+            done.push(Object.assign({}, a, { sum: "", pri: "routine", grd: GRADES[a.typ] }));
+          });
+        });
+      });
+    }, Promise.resolve());
+
+    return work.then(function () {
+      S.items = done.concat(S.items).slice(0, 150);
+      S.lastScan = new Date().toISOString();
+      S.scanning = false; setStatus(""); saveFeed(); render();
+    });
+  }).catch(function (e) {
+    S.scanning = false; setStatus(""); S.err = "Sweep failed — " + e.message; render();
+  });
+}
+
+/* ---------------------------- brief ------------------------------- */
+
+function makeBrief() {
+  var pool = S.items.filter(function (i) { return i.sum; }).slice(0, 22);
+  if (!pool.length) { S.err = "Nothing summarised to brief on. Run a sweep first."; render(); return; }
+  S.err = ""; S.briefing = true; S.tab = "brief"; render();
+
+  var lines = pool.map(function (i) {
+    return "[" + i.cat + "] " + i.hl + " (" + i.src + ") — " + i.sum;
+  }).join("\n");
+
+  var prompt =
+"Compile a media brief for a staff officer from the items below. Plain text, no markdown symbols, under 180 words.\n\n" +
+"BOTTOM LINE\nTwo sentences on the overall picture.\n\n" +
+"DEVELOPMENTS\nThree or four single-line points, each naming the driver and the so-what.\n\n" +
+"WATCH\nOne line on what to track over the next 72 hours.\n\n" +
+"Be specific. If the items do not support a judgement, say so.\n\nITEMS:\n" + lines;
+
+  runChain(prompt).then(function (out) {
+    S.brief = out.trim(); S.briefing = false; saveFeed(); render();
+  }).catch(function (e) {
+    S.err = e.message; S.briefing = false; render();
+  });
+}
+
+/* ---------------------------- render ------------------------------ */
+
+function unseenItems() {
+  var seen = {}; S.seen.forEach(function (i) { seen[i] = 1; });
+  return S.items.filter(function (i) { return !seen[i.id]; });
+}
+function isFlagged(i) {
+  if (i.pri && i.pri !== "routine") return true;
+  var blob = (i.hl + " " + (i.sum || "")).toLowerCase();
+  return S.watch.filter(function (w) { return w.alert && w.on; })
+    .some(function (w) { return words(w.term).some(function (x) { return blob.indexOf(x) > -1; }); });
+}
+function stClass(s) {
+  if (!s) return "idle";
+  if (s === "ok") return "ok";
+  if (s === "rate limited" || s === "no key") return "warn";
+  return "bad";
+}
+
+function itemNode(it, isNew) {
+  return el("a", { class: "item", href: it.url || "#", target: "_blank", rel: "noreferrer" },
+    el("div", { class: "item-top" },
+      el("span", { class: "grade", "data-p": it.pri, text: it.grd }),
+      el("span", { class: "stamp", text: dayStamp(it.dt) }),
+      isNew ? el("span", { class: "new", text: "NEW" }) : null),
+    el("h3", { class: "hl", text: it.hl }),
+    el("p", { class: "sum", "data-raw": it.sum ? "0" : "1",
+      text: it.sum || "Not summarised — no engine answered on the last sweep." }),
+    el("div", { class: "meta" },
+      el("span", { text: it.src }), el("span", { text: "·" }),
+      el("b", { text: it.cat }), el("span", { text: "·" }),
+      el("span", { text: it.via }),
+      it.pri !== "routine" ? el("span", { text: "·" }) : null,
+      it.pri !== "routine" ? el("em", { text: it.pri }) : null));
+}
+
+function render() {
+  var app = document.getElementById("app");
+  var scrollTo = 0;
+  app.innerHTML = "";
+
+  /* header */
+  var tabs = el("nav", { class: "tabs" });
+  [["feed","Feed",S.items.length],["watch","Watch",S.watch.filter(function(w){return w.on;}).length],
+   ["brief","Brief",0],["setup","Setup",0]].forEach(function (t) {
+    tabs.appendChild(el("button", { class: "tab", "data-on": S.tab === t[0] ? "1" : "0",
+      on: { click: function () { S.tab = t[0]; render(); window.scrollTo(0, 0); } } },
+      t[1], t[2] > 0 ? el("i", { text: String(t[2]) }) : null));
+  });
+  app.appendChild(el("header", { class: "head" },
+    el("div", { class: "head-in" },
+      el("h1", { html: 'Media <span>Watch</span>' }),
+      el("span", { class: "dtg", text: dtg(new Date()) })),
+    tabs));
+
+  /* alert strip */
+  var alerts = unseenItems().filter(isFlagged);
+  if (alerts.length) {
+    app.appendChild(el("div", { class: "alert" },
+      el("span", { class: "dot" }),
+      el("span", { class: "alert-t", text: alerts.length + " flagged · " + unseenItems().length + " unread" }),
+      el("button", { class: "link", text: "Mark all read",
+        on: { click: function () { S.seen = S.items.map(function (i) { return i.id; }); saveFeed(); render(); } } })));
+  }
+
+  /* scan bar */
+  app.appendChild(el("div", { class: "scan" },
+    el("button", { class: "sweep", disabled: S.scanning, text: S.scanning ? "Sweeping" : "Sweep now",
+      on: { click: function () { if (!S.scanning) sweep(); } } }),
+    el("span", { class: "scan-msg", id: "scanmsg",
+      text: S.scanning ? S.status
+        : S.lastScan ? "Last sweep " + dtg(new Date(S.lastScan)) : "No sweep run yet" })));
+  if (S.scanning) app.appendChild(el("div", { class: "prog" }, el("i")));
+  if (S.err) app.appendChild(el("div", { class: "err", text: S.err }));
+
+  if (S.tab === "feed") renderFeed(app);
+  if (S.tab === "watch") renderWatch(app);
+  if (S.tab === "brief") renderBrief(app);
+  if (S.tab === "setup") renderSetup(app);
+}
+
+function renderFeed(app) {
+  if (S.items.length) {
+    var cats = ["ALL"];
+    S.items.forEach(function (i) { if (cats.indexOf(i.cat) === -1) cats.push(i.cat); });
+    var f = el("div", { class: "filters" });
+    cats.forEach(function (c) {
+      f.appendChild(el("button", { class: "chip", "data-on": S.filter === c ? "1" : "0", text: c,
+        on: { click: function () { S.filter = c; render(); } } }));
+    });
+    app.appendChild(f);
+  }
+  var shown = S.filter === "ALL" ? S.items : S.items.filter(function (i) { return i.cat === S.filter; });
+  if (!shown.length) {
+    app.appendChild(el("div", { class: "empty" },
+      el("b", { text: "Feed is empty" }),
+      "Sweep now pulls headlines from GDELT, Google News and your outlet feeds, then summarises them on whichever engine answers first. Add a key in SETUP before the first sweep."));
+    return;
+  }
+  var seen = {}; S.seen.forEach(function (i) { seen[i] = 1; });
+  shown.forEach(function (i) { app.appendChild(itemNode(i, !seen[i.id])); });
+  app.appendChild(el("div", { class: "legend", html:
+    "GRADE = SOURCE RELIABILITY A–F / INFORMATION CREDIBILITY 1–6<br>" +
+    "A RELIABLE · B USUALLY RELIABLE · C FAIRLY RELIABLE · D NOT USUALLY RELIABLE<br>" +
+    "1 CONFIRMED · 2 PROBABLY TRUE · 3 POSSIBLY TRUE · 4 DOUBTFUL<br>" +
+    "GRADES ARE MACHINE-ASSIGNED. VERIFY BEFORE USE." }));
+}
+
+function renderWatch(app) {
+  var cats = [];
+  S.watch.forEach(function (w) { if (cats.indexOf(w.cat) === -1) cats.push(w.cat); });
+
+  cats.forEach(function (cat) {
+    var sec = el("div", { class: "sec" },
+      el("div", { class: "sec-h" },
+        el("span", { class: "sec-t", text: cat }),
+        el("button", { class: "link", text: "Sweep " + cat, disabled: S.scanning,
+          on: { click: function () { if (!S.scanning) sweep(cat); } } })));
+    S.watch.filter(function (w) { return w.cat === cat; }).forEach(function (w) {
+      sec.appendChild(el("div", { class: "row" },
+        el("button", { class: "box", "data-on": w.on ? "1" : "0", "aria-label": w.on ? "Turn off" : "Turn on",
+          on: { click: function () { w.on = !w.on; saveCfg(); render(); } } }),
+        el("span", { class: "term", "data-off": w.on ? "0" : "1", text: w.term }),
+        el("button", { class: "bell", "data-on": w.alert ? "1" : "0", text: "ALERT",
+          on: { click: function () { w.alert = !w.alert; saveCfg(); render(); } } }),
+        el("button", { class: "x", text: "×", "aria-label": "Remove keyword",
+          on: { click: function () {
+            S.watch = S.watch.filter(function (y) { return y.id !== w.id; }); saveCfg(); render(); } } })));
+    });
+    app.appendChild(sec);
+  });
+
+  var tIn = el("input", { placeholder: "What to look for", value: "" });
+  var cIn = el("input", { placeholder: "Category", value: "" });
+  function add() {
+    var term = tIn.value.trim();
+    if (!term) return;
+    var cat = (cIn.value.trim() || "GENERAL").toUpperCase().slice(0, 14);
+    S.watch.push({ id: hash(term + cat), term: term, cat: cat, alert: false, on: true });
+    saveCfg(); render();
+  }
+  tIn.addEventListener("keydown", function (e) { if (e.key === "Enter") add(); });
+  cIn.addEventListener("keydown", function (e) { if (e.key === "Enter") add(); });
+
+  app.appendChild(el("div", { class: "sec" },
+    el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Add keyword" })),
+    tIn,
+    el("div", { class: "add" }, cIn,
+      el("button", { class: "addbtn", text: "Add", on: { click: add } })),
+    el("div", { class: "hint", text: "ALERT raises the strip at the top of every tab whenever that keyword appears in something you have not read." })));
+}
+
+function renderBrief(app) {
+  app.appendChild(el("div", { class: "scan" },
+    el("button", { class: "sweep", disabled: S.briefing || S.scanning,
+      text: S.briefing ? "Compiling" : "Compile brief",
+      on: { click: function () { if (!S.briefing && !S.scanning) makeBrief(); } } }),
+    el("span", { class: "scan-msg", text: S.briefing ? "Reading the feed…"
+      : S.items.filter(function (i) { return i.sum; }).length + " summarised items in scope" })));
+  if (S.briefing) app.appendChild(el("div", { class: "prog" }, el("i")));
+  if (S.brief) app.appendChild(el("div", { class: "brief", text: S.brief }));
+  else if (!S.briefing) app.appendChild(el("div", { class: "empty" },
+    el("b", { text: "No brief compiled" }),
+    "Compile brief reads the summarised feed and returns a bottom line, the developments that matter, and what to track next."));
+}
+
+function renderSetup(app) {
+  /* engines */
+  var sec = el("div", { class: "sec" },
+    el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Summary engines" })));
+
+  var keysList = Object.keys(PROVIDERS);
+  sec.appendChild(el("span", { class: "lbl", text: "Primary" }));
+  var sel1 = el("select");
+  keysList.forEach(function (p) {
+    sel1.appendChild(el("option", { value: p, selected: S.chain[0] === p ? "selected" : null, text: PROVIDERS[p].label }));
+  });
+  sel1.addEventListener("change", function () {
+    var v = sel1.value;
+    S.chain = [v].concat(S.chain.filter(function (x) { return x !== v; }));
+    saveCfg(); render();
+  });
+  sec.appendChild(sel1);
+
+  sec.appendChild(el("span", { class: "lbl", text: "Falls back to" }));
+  var sel2 = el("select");
+  keysList.filter(function (p) { return p !== S.chain[0]; }).forEach(function (p) {
+    sel2.appendChild(el("option", { value: p, selected: S.chain[1] === p ? "selected" : null, text: PROVIDERS[p].label }));
+  });
+  sel2.addEventListener("change", function () {
+    var v = sel2.value;
+    S.chain = [S.chain[0], v].concat(S.chain.filter(function (x) { return x !== v && x !== S.chain[0]; }));
+    saveCfg(); render();
+  });
+  sec.appendChild(sel2);
+
+  sec.appendChild(el("div", { class: "hint", text:
+    "A rate limit or an error on the primary sends the request straight to the next engine. The order is remembered between sessions." }));
+  S.chain.forEach(function (p) {
+    sec.appendChild(el("div", { class: "eng" },
+      el("span", { text: PROVIDERS[p] ? PROVIDERS[p].label : p }),
+      el("span", { class: "st", "data-s": stClass(S.engine[p]), text: S.engine[p] || "idle" })));
+  });
+  app.appendChild(sec);
+
+  /* keys */
+  var ksec = el("div", { class: "sec" },
+    el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Keys" })));
+  keysList.forEach(function (p) {
+    var inp = el("input", { class: "mono", type: "password", placeholder: PROVIDERS[p].hint });
+    inp.value = S.keys[p] || "";
+    inp.addEventListener("input", function () { S.keys[p] = inp.value.trim(); saveCfg(); });
+    ksec.appendChild(el("div", { style: "margin-bottom:16px" },
+      el("span", { class: "lbl", text: PROVIDERS[p].label }),
+      inp,
+      el("div", { class: "hint", text: PROVIDERS[p].note })));
+  });
+  ksec.appendChild(el("div", { class: "hint warn", text:
+    "Keys are stored in this browser on this device only. That is not a secure keychain — rotate them if the phone is ever out of your hands." }));
+  app.appendChild(ksec);
+
+  /* feeds */
+  var fsec = el("div", { class: "sec" },
+    el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Outlet feeds" })));
+  S.feeds.forEach(function (f) {
+    fsec.appendChild(el("div", { class: "row" },
+      el("button", { class: "box", "data-on": f.on ? "1" : "0", "aria-label": f.on ? "Turn off" : "Turn on",
+        on: { click: function () { f.on = !f.on; saveCfg(); render(); } } }),
+      el("div", { class: "term", "data-off": f.on ? "0" : "1" },
+        el("span", { text: f.name }),
+        el("div", { class: "sub", text: S.feedState[f.id] || "not read yet" })),
+      el("button", { class: "x", text: "×", "aria-label": "Remove feed",
+        on: { click: function () {
+          S.feeds = S.feeds.filter(function (y) { return y.id !== f.id; }); saveCfg(); render(); } } })));
+  });
+  var fIn = el("input", { class: "mono", placeholder: "https://…/feed" });
+  function addFeed() {
+    var url = fIn.value.trim();
+    if (url.indexOf("http") !== 0) return;
+    S.feeds.push({ id: hash(url), name: domainOf(url), url: url, on: true });
+    saveCfg(); render();
+  }
+  fIn.addEventListener("keydown", function (e) { if (e.key === "Enter") addFeed(); });
+  fsec.appendChild(el("div", { class: "add" }, fIn,
+    el("button", { class: "addbtn", text: "Add", on: { click: addFeed } })));
+  fsec.appendChild(el("div", { class: "hint", text:
+    "Feed addresses change without warning. After each sweep every line shows how many items it returned, so anything reading unreachable can be replaced or switched off." }));
+  app.appendChild(fsec);
+
+  /* relay */
+  var pIn = el("input", { class: "mono" });
+  pIn.value = S.proxy;
+  pIn.addEventListener("input", function () { S.proxy = pIn.value.trim(); saveCfg(); });
+  app.appendChild(el("div", { class: "sec" },
+    el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Fetch relay" })),
+    pIn,
+    el("div", { class: "hint", text:
+      "News sites do not allow direct browser requests, so feeds are fetched through this relay. GDELT is tried directly first and only relayed if that fails. Public relays are rate limited and do go down — swapping in another one is the first thing to try if sweeps start failing." })));
+
+  /* reset */
+  app.appendChild(el("div", { class: "sec" },
+    el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Stored data" })),
+    el("div", { class: "hint", text:
+      "Everything lives in this browser on this device. Nothing is sent anywhere except to the news sources and the engine you chose." }),
+    el("div", { class: "add" },
+      el("button", { class: "addbtn", text: "Clear feed", on: { click: function () {
+        S.items = []; S.seen = []; S.brief = ""; S.lastScan = null; saveFeed(); render();
+      } } }),
+      el("button", { class: "addbtn", text: "Reset all", on: { click: function () {
+        if (!confirm("Erase keywords, feeds, keys and stored articles?")) return;
+        try { localStorage.removeItem("mw:config"); localStorage.removeItem("mw:feed"); } catch (e) {}
+        location.reload();
+      } } }))));
+}
+
+/* ---------------------------- boot -------------------------------- */
+
+load();
+render();
+setInterval(function () {
+  if (S.tab === "feed" && !S.scanning) {
+    var n = document.querySelector(".dtg");
+    if (n) n.textContent = dtg(new Date());
+  }
+}, 30000);
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("sw.js").catch(function () {});
+  });
+}
+</script>
+</body>
+</html>
