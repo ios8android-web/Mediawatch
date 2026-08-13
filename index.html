@@ -173,7 +173,7 @@ var PROVIDERS = {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile", temperature: 0.2, max_tokens: 1400,
+          model: "llama-3.3-70b-versatile", temperature: 0.2, max_tokens: 2000,
           messages: [{ role: "user", content: prompt }]
         })
       }).then(readOpenAI);
@@ -189,7 +189,7 @@ var PROVIDERS = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.2, maxOutputTokens: 1400 }
+          generationConfig: { temperature: 0.2, maxOutputTokens: 2000 }
         })
       }).then(function (r) {
         if (r.status === 429) throw rateErr();
@@ -210,7 +210,7 @@ var PROVIDERS = {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
         body: JSON.stringify({
-          model: "meta-llama/llama-3.3-70b-instruct:free", temperature: 0.2, max_tokens: 1400,
+          model: "meta-llama/llama-3.3-70b-instruct:free", temperature: 0.2, max_tokens: 2000,
           messages: [{ role: "user", content: prompt }]
         })
       }).then(readOpenAI);
@@ -297,6 +297,16 @@ function gdeltDay(s) {
 }
 var GRADE_RE = /^[A-F][1-6]$/;
 function words(t) { return t.toLowerCase().split(/\s+/).filter(function (x) { return x.length > 4; }); }
+/* A single loose word (e.g. "india" inside "LAC India China border") must not
+   tag an unrelated headline. Require the whole phrase, or at least two of its
+   distinct significant words, before counting it a match. */
+function matchesTerm(term, blob) {
+  var t = term.toLowerCase();
+  if (blob.indexOf(t) > -1) return true;
+  var w = words(term);
+  var hits = w.filter(function (x) { return blob.indexOf(x) > -1; }).length;
+  return w.length > 1 ? hits >= 2 : hits >= 1;
+}
 
 /* tiny DOM builder */
 function el(tag, attrs) {
@@ -436,6 +446,15 @@ function gdelt(term) {
   });
 }
 
+function stripHtml(s) {
+  return String(s || "")
+    .replace(/<!\[CDATA\[|\]\]>/g, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+    .replace(/\s+/g, " ").trim();
+}
+
 function parseRss(xml, defaultSrc) {
   var doc = new DOMParser().parseFromString(xml, "text/xml");
   if (doc.querySelector("parsererror")) throw new Error("bad feed XML");
@@ -452,10 +471,13 @@ function parseRss(xml, defaultSrc) {
       var m = hl.match(/^(.*)\s+-\s+([^-]{2,40})$/);
       if (m) { hl = m[1].trim(); src = m[2].trim(); }
     }
+    var descEl = n.querySelector("description") || n.querySelector("summary");
+    var ce = n.getElementsByTagName("content:encoded")[0];
+    var desc = stripHtml((descEl && descEl.textContent) || (ce && ce.textContent) || "").slice(0, 400);
     var pd = n.querySelector("pubDate"), up = n.querySelector("updated");
     var raw = (pd && pd.textContent) || (up && up.textContent) || "";
     var d = new Date(raw);
-    return { hl: hl, url: url, src: src || domainOf(url),
+    return { hl: hl, url: url, src: src || domainOf(url), desc: desc,
              dt: isNaN(d) ? new Date().toISOString().slice(0, 10) : d.toISOString().slice(0, 10),
              via: defaultSrc ? "RSS" : "GNEWS" };
   });
@@ -551,15 +573,14 @@ function sweep(onlyCat) {
       var cat = a.cat;
       if (!cat) {
         var blob = a.hl.toLowerCase();
-        var hit = active.find(function (w) {
-          return words(w.term).some(function (x) { return blob.indexOf(x) > -1; });
-        });
+        var hit = active.find(function (w) { return matchesTerm(w.term, blob); });
         if (!hit) return;
         cat = hit.cat;
       }
       var dom = a.src && a.src.indexOf(".") > -1 ? a.src : domainOf(a.url);
       tagged.push({ id: hash(a.url), hl: a.hl.slice(0, 150), url: a.url,
-                    src: a.src || dom, dt: a.dt, via: a.via, cat: cat, typ: classify(dom) });
+                    src: a.src || dom, dt: a.dt, via: a.via, cat: cat, typ: classify(dom),
+                    desc: (a.desc || "").slice(0, 400) });
     });
 
     var map = {}, fresh = [];
@@ -585,17 +606,24 @@ function sweep(onlyCat) {
 
     /* 4. summarise in batches of eight */
     var batches = [], i;
-    for (i = 0; i < fresh.length; i += 8) batches.push(fresh.slice(i, i + 8));
+    for (i = 0; i < fresh.length; i += 6) batches.push(fresh.slice(i, i + 6));
     var done = [];
 
     var work = batches.reduce(function (acc, batch, bi) {
       return acc.then(function () {
         setStatus("Summarising batch " + (bi + 1) + " of " + batches.length);
-        var list = batch.map(function (a, n) { return (n + 1) + ". [" + a.src + "] " + a.hl; }).join("\n");
+        var list = batch.map(function (a, n) {
+          var extra = a.desc && a.desc.length > 20 &&
+            a.desc.toLowerCase().indexOf(a.hl.toLowerCase().slice(0, 30)) !== 0
+            ? " :: " + a.desc : "";
+          return (n + 1) + ". [" + a.src + "] " + a.hl + extra;
+        }).join("\n");
         var prompt =
-"For each numbered news item below, write one summary line for a defence staff officer.\n\n" +
+"For each numbered item below, write a summary for a defence staff officer. Use ONLY the information given — do not invent names, figures or context that are not present.\n\n" +
+"Where text follows a double colon, that is the source's own description — use it and write 35-55 words covering what happened, who is involved, and why it matters.\n" +
+"Where an item has only a headline, write one grounded sentence of 15-25 words that stays close to the headline. Do not pad it with speculation.\n\n" +
 "Return ONLY a JSON array, no prose and no code fences, one object per item in the same order:\n" +
-'[{"n":1,"sum":"what happened and why it matters, max 26 words","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
+'[{"n":1,"sum":"summary text","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
 'pri: "flash" only for a major breaking development, "priority" for significant, otherwise "routine".\n' +
 "grd: source reliability A-F then information credibility 1-6, judged from the outlet named in brackets.\n\n" +
 "ITEMS:\n" + list;
@@ -605,7 +633,7 @@ function sweep(onlyCat) {
             var m = parsed.find(function (x) { return Number(x.n) === n + 1; }) || {};
             var g = String(m.grd || "").toUpperCase();
             done.push(Object.assign({}, a, {
-              sum: String(m.sum || "").slice(0, 260),
+              sum: String(m.sum || "").slice(0, 480),
               pri: ["flash","priority","routine"].indexOf(m.pri) > -1 ? m.pri : "routine",
               grd: GRADE_RE.test(g) ? g : GRADES[a.typ]
             }));
@@ -683,7 +711,7 @@ function isFlagged(i) {
   if (i.pri && i.pri !== "routine") return true;
   var blob = (i.hl + " " + (i.sum || "")).toLowerCase();
   return S.watch.filter(function (w) { return w.alert && w.on; })
-    .some(function (w) { return words(w.term).some(function (x) { return blob.indexOf(x) > -1; }); });
+    .some(function (w) { return matchesTerm(w.term, blob); });
 }
 function stClass(s) {
   if (!s) return "idle";
@@ -706,7 +734,9 @@ function itemNode(it, isNew) {
       el("b", { text: it.cat }), el("span", { text: "·" }),
       el("span", { text: it.via }),
       it.pri !== "routine" ? el("span", { text: "·" }) : null,
-      it.pri !== "routine" ? el("em", { text: it.pri }) : null));
+      it.pri !== "routine" ? el("em", { text: it.pri }) : null,
+      it.sum && !(it.desc && it.desc.length > 20) ? el("span", { text: "·" }) : null,
+      it.sum && !(it.desc && it.desc.length > 20) ? el("span", { text: "headline only" }) : null));
 }
 
 function render() {
