@@ -46,7 +46,9 @@ Safari → **aistudio.google.com** → **Get API key** → copy the `AIza…` st
    Tap **ALERT** on the ones that should raise the top strip.
 6. **FEED** → **Sweep now**
 
-First sweep takes one to three minutes. It reads nine outlet feeds, then queries
+First sweep takes roughly 20–40 seconds. Sources are fetched in parallel and anything
+that does not answer within 8 seconds is skipped, so a dead feed costs seconds rather
+than stalling the whole sweep.
 GDELT and Google News for each keyword, then summarises in batches of eight.
 
 ---
@@ -73,7 +75,8 @@ at the top of every tab until you mark them read.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Every feed reads "unreachable" | The fetch relay is down | SETUP → Fetch relay → try `https://corsproxy.io/?` |
+| Every feed reads "unreachable" | All three relays are down | SETUP → **Test relays**. Add a working one in the field below. |
+| Some feeds read "timed out" | Slow source | Normal. It is skipped and the sweep carries on. |
 | One feed reads "unreachable" | That address changed | Switch it off or replace it |
 | "All engines unavailable" | No key, or both rate limited | Check SETUP → Keys |
 | Headlines appear with no summary | Engines failed mid-sweep | Sweep again; headlines are kept either way |

@@ -263,7 +263,13 @@ var SEED = [
   { term: "artillery precision fires rocket", cat: "FIRES", alert: false }
 ];
 
-var DEFAULT_PROXY = "https://api.allorigins.win/raw?url=";
+var DEFAULT_RELAYS = [
+  "https://api.codetabs.com/v1/proxy?quest=",
+  "https://api.allorigins.win/raw?url=",
+  "https://corsproxy.io/?url="
+];
+var FETCH_TIMEOUT = 8000;   /* nothing is allowed to stall the queue */
+var POOL_LIMIT = 5;         /* simultaneous requests */
 
 /* ---------------------------- utilities --------------------------- */
 
@@ -318,9 +324,10 @@ var S = {
   feeds: DEFAULT_FEEDS.slice(),
   keys: { groq: "", gemini: "", openrouter: "" },
   chain: ["groq", "gemini", "openrouter"],
-  proxy: DEFAULT_PROXY,
+  relays: DEFAULT_RELAYS.slice(),
+  bestRelay: null,
   items: [], seen: [], lastScan: null, brief: "",
-  engine: {}, feedState: {},
+  engine: {}, feedState: {}, relayState: {},
   scanning: false, briefing: false, status: "", err: ""
 };
 
@@ -332,7 +339,9 @@ function load() {
       if (cfg.feeds && cfg.feeds.length) S.feeds = cfg.feeds;
       if (cfg.keys) Object.assign(S.keys, cfg.keys);
       if (cfg.chain && cfg.chain.length) S.chain = cfg.chain;
-      if (cfg.proxy) S.proxy = cfg.proxy;
+      if (cfg.relays && cfg.relays.length) S.relays = cfg.relays;
+      else if (cfg.proxy) S.relays = [cfg.proxy].concat(
+        DEFAULT_RELAYS.filter(function (r) { return r !== cfg.proxy; }));
     }
     var f = JSON.parse(localStorage.getItem("mw:feed") || "null");
     if (f) {
@@ -344,7 +353,7 @@ function load() {
 function saveCfg() {
   try {
     localStorage.setItem("mw:config", JSON.stringify(
-      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, proxy: S.proxy }));
+      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, relays: S.relays }));
   } catch (e) {}
 }
 function saveFeed() {
@@ -356,15 +365,61 @@ function saveFeed() {
 
 /* ---------------------------- fetching ---------------------------- */
 
-function getText(url) {
-  return fetch(url).then(function (r) {
+/* Every request is capped. A dead source is skipped, never allowed to
+   block the queue — this is what stalled the first build. */
+function timedFetch(u) {
+  var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  var timer = setTimeout(function () { if (ctl) ctl.abort(); }, FETCH_TIMEOUT);
+  var opts = ctl ? { signal: ctl.signal } : {};
+  return fetch(u, opts).then(function (r) {
+    clearTimeout(timer);
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.text();
-  }).catch(function () {
-    return fetch(S.proxy + encodeURIComponent(url)).then(function (r) {
-      if (!r.ok) throw new Error("relay HTTP " + r.status);
-      return r.text();
-    });
+  }, function (e) {
+    clearTimeout(timer);
+    throw new Error(e && e.name === "AbortError" ? "timed out" : "no response");
+  });
+}
+
+/* Direct first, then each relay in turn. Whichever relay answers is
+   remembered and tried first from then on. */
+function getText(url) {
+  var relays = S.relays.filter(Boolean);
+  var order = relays.slice();
+  if (S.bestRelay && order.indexOf(S.bestRelay) > 0) {
+    order = [S.bestRelay].concat(order.filter(function (r) { return r !== S.bestRelay; }));
+  }
+  var targets = [{ u: url, r: null }].concat(order.map(function (r) {
+    return { u: r + encodeURIComponent(url), r: r };
+  }));
+  var i = 0;
+  function next() {
+    if (i >= targets.length) return Promise.reject(new Error("unreachable"));
+    var t = targets[i++];
+    return timedFetch(t.u).then(function (txt) {
+      if (t.r) S.bestRelay = t.r;
+      return txt;
+    }, next);
+  }
+  return next();
+}
+
+/* Run tasks a few at a time. One failure never stops the rest. */
+function pool(tasks, limit, onTick) {
+  var i = 0, done = 0, total = tasks.length;
+  if (!total) return Promise.resolve();
+  return new Promise(function (resolve) {
+    function launch() {
+      if (i >= total) return;
+      var t = tasks[i++];
+      t().catch(function () {}).then(function () {
+        done++;
+        if (onTick) onTick(done, total);
+        if (done === total) resolve();
+        else launch();
+      });
+    }
+    for (var k = 0; k < Math.min(limit, total); k++) launch();
   });
 }
 
@@ -457,36 +512,39 @@ function sweep(onlyCat) {
 
   var raw = [];
   var liveFeeds = S.feeds.filter(function (f) { return f.on; });
+  var tasks = [];
 
-  /* 1. outlet feeds, once per sweep */
-  var chainP = liveFeeds.reduce(function (acc, f) {
-    return acc.then(function () {
-      setStatus("Reading " + f.name);
+  /* outlet feeds */
+  liveFeeds.forEach(function (f) {
+    S.feedState[f.id] = "waiting";
+    tasks.push(function () {
       return getText(f.url).then(function (t) {
         var arts = parseRss(t, f.name);
         S.feedState[f.id] = arts.length + " items";
         arts.forEach(function (a) { raw.push(a); });
-      }).catch(function () { S.feedState[f.id] = "unreachable"; });
-    });
-  }, Promise.resolve());
-
-  /* 2. GDELT + Google News per keyword */
-  active.forEach(function (t) {
-    chainP = chainP.then(function () {
-      setStatus("GDELT — " + t.term.slice(0, 30));
-      return gdelt(t.term).then(function (a) {
-        a.forEach(function (x) { x.cat = t.cat; raw.push(x); });
-      }).catch(function () {});
-    }).then(function () {
-      setStatus("Google News — " + t.term.slice(0, 26));
-      return googleNews(t.term).then(function (a) {
-        a.forEach(function (x) { x.cat = t.cat; raw.push(x); });
-      }).catch(function () {});
+      }, function (e) {
+        S.feedState[f.id] = e.message || "unreachable";
+      });
     });
   });
 
-  /* 3. tag, dedupe, rank */
-  chainP.then(function () {
+  /* GDELT + Google News per keyword */
+  active.forEach(function (t) {
+    tasks.push(function () {
+      return gdelt(t.term).then(function (a) {
+        a.forEach(function (x) { x.cat = t.cat; raw.push(x); });
+      }, function () {});
+    });
+    tasks.push(function () {
+      return googleNews(t.term).then(function (a) {
+        a.forEach(function (x) { x.cat = t.cat; raw.push(x); });
+      }, function () {});
+    });
+  });
+
+  pool(tasks, POOL_LIMIT, function (d, tot) {
+    setStatus("Collecting — " + d + " of " + tot + " sources · " + raw.length + " headlines");
+  }).then(function () {
     var tagged = [];
     raw.forEach(function (a) {
       if (!a.hl || !a.url) return;
@@ -514,7 +572,14 @@ function sweep(onlyCat) {
 
     if (!fresh.length) {
       S.scanning = false; S.lastScan = new Date().toISOString(); setStatus("");
-      S.err = "Sweep finished but found nothing new. Widen a keyword, or check SETUP if every feed reads unreachable.";
+      var dead = liveFeeds.filter(function (f) {
+        return (S.feedState[f.id] || "").indexOf("items") === -1;
+      }).length;
+      S.err = dead >= liveFeeds.length
+        ? "Every source failed. Open SETUP, tap Test relays, and switch to whichever one reports working."
+        : (raw.length
+            ? "Collected " + raw.length + " headlines but none matched your keywords, or all of them were already in the feed. Try a broader term in WATCH."
+            : "Sweep finished but found nothing. Check SETUP — Test relays.");
       saveFeed(); render(); return;
     }
 
@@ -587,6 +652,25 @@ function makeBrief() {
   }).catch(function (e) {
     S.err = e.message; S.briefing = false; render();
   });
+}
+
+/* ---------------------------- relay test -------------------------- */
+
+function testRelays() {
+  var target = "https://theprint.in/feed/";
+  S.relayState = {};
+  S.relays.filter(Boolean).forEach(function (r) { S.relayState[r] = "testing"; });
+  render();
+  var tasks = S.relays.filter(Boolean).map(function (r) {
+    return function () {
+      return timedFetch(r + encodeURIComponent(target)).then(function (t) {
+        S.relayState[r] = t.indexOf("<") > -1 ? "working" : "odd response";
+      }, function (e) {
+        S.relayState[r] = e.message || "failed";
+      });
+    };
+  });
+  pool(tasks, 3).then(function () { render(); });
 }
 
 /* ---------------------------- render ------------------------------ */
@@ -838,15 +922,35 @@ function renderSetup(app) {
     "Feed addresses change without warning. After each sweep every line shows how many items it returned, so anything reading unreachable can be replaced or switched off." }));
   app.appendChild(fsec);
 
-  /* relay */
-  var pIn = el("input", { class: "mono" });
-  pIn.value = S.proxy;
-  pIn.addEventListener("input", function () { S.proxy = pIn.value.trim(); saveCfg(); });
-  app.appendChild(el("div", { class: "sec" },
-    el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Fetch relay" })),
-    pIn,
-    el("div", { class: "hint", text:
-      "News sites do not allow direct browser requests, so feeds are fetched through this relay. GDELT is tried directly first and only relayed if that fails. Public relays are rate limited and do go down — swapping in another one is the first thing to try if sweeps start failing." })));
+  /* relays */
+  var rsec = el("div", { class: "sec" },
+    el("div", { class: "sec-h" },
+      el("span", { class: "sec-t", text: "Fetch relays" }),
+      el("button", { class: "link", text: "Test relays", on: { click: testRelays } })));
+  S.relays.forEach(function (r, idx) {
+    var inp = el("input", { class: "mono" });
+    inp.value = r;
+    inp.addEventListener("input", function () { S.relays[idx] = inp.value.trim(); saveCfg(); });
+    rsec.appendChild(el("div", { style: "margin-bottom:12px" },
+      inp,
+      el("div", { class: "eng" },
+        el("span", { text: S.bestRelay === r ? "in use" : "standby" }),
+        el("span", { class: "st",
+          "data-s": stClass(S.relayState[r] === "working" ? "ok" : S.relayState[r]),
+          text: S.relayState[r] || "untested" }))));
+  });
+  var nrIn = el("input", { class: "mono", placeholder: "https://relay…/?url=" });
+  function addRelay() {
+    var v = nrIn.value.trim();
+    if (v.indexOf("http") !== 0) return;
+    S.relays.push(v); saveCfg(); render();
+  }
+  nrIn.addEventListener("keydown", function (e) { if (e.key === "Enter") addRelay(); });
+  rsec.appendChild(el("div", { class: "add" }, nrIn,
+    el("button", { class: "addbtn", text: "Add", on: { click: addRelay } })));
+  rsec.appendChild(el("div", { class: "hint", text:
+    "News sites refuse direct browser requests, so feeds go through a relay. Each is tried in turn until one answers, and the one that works is remembered. Every request times out after 8 seconds, so a dead relay costs seconds rather than stalling the sweep." }));
+  app.appendChild(rsec);
 
   /* reset */
   app.appendChild(el("div", { class: "sec" },
