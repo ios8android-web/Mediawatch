@@ -96,6 +96,8 @@ h1::before{content:"";display:inline-block;width:8px;height:8px;background:var(-
 .vdiv{display:none}
 
 /* ---- filters ---- */
+.tally{display:flex;align-items:center;gap:10px;margin:10px 16px 0;padding:10px 13px;background:var(--panel);border-radius:var(--r-sm);font-size:11px;color:var(--mute);line-height:1.4}
+.tally span{flex:1}
 .filters{display:flex;gap:7px;padding:14px 16px 4px;overflow-x:auto;
   -webkit-overflow-scrolling:touch;scrollbar-width:none}
 .filters::-webkit-scrollbar{display:none}
@@ -130,6 +132,7 @@ h1::before{content:"";display:inline-block;width:8px;height:8px;background:var(-
 .tag.cat{background:var(--accent-soft);color:var(--accent)}
 .tag.pri{background:var(--prio-bg);color:var(--prio-fg)}
 .tag.pri[data-p="flash"]{background:var(--flash-bg);color:var(--flash-fg)}
+.tag.suggest{background:var(--accent-soft);color:var(--accent);font-weight:600;padding:7px 11px}
 .expand{display:block;margin-top:12px;font-family:var(--disp);font-size:12px;font-weight:600;
   color:var(--accent);background:var(--accent-soft);padding:10px 12px;border-radius:var(--r-sm);
   text-align:center;width:100%}
@@ -318,16 +321,51 @@ var DEFAULT_FEEDS = [
   { id: "f9", name: "Breaking Defense", url: "https://breakingdefense.com/feed/", on: true }
 ];
 
+/* One concept per keyword. Proper nouns and acronyms carry the most signal;
+   generic words like "India" or "defence" are deliberately absent because
+   they appear in half of Indian news and narrow nothing. */
 var SEED = [
-  { term: "Indian Army operations", cat: "FORCE", alert: false },
-  { term: "LAC India China border", cat: "NORTHERN", alert: true },
-  { term: "Line of Control Pakistan", cat: "WESTERN", alert: true },
-  { term: "Indian defence procurement contract", cat: "PROCUREMENT", alert: false },
-  { term: "military satellite space surveillance", cat: "SPACE", alert: false },
-  { term: "artillery precision fires rocket", cat: "FIRES", alert: false }
+  { term: "LAC", cat: "NORTHERN", alert: true },
+  { term: "India China border", cat: "NORTHERN", alert: true },
+  { term: "Line of Control", cat: "WESTERN", alert: true },
+  { term: "Indian Army", cat: "FORCE", alert: false },
+  { term: "defence procurement", cat: "PROCUREMENT", alert: false },
+  { term: "DRDO", cat: "PROCUREMENT", alert: false },
+  { term: "military satellite", cat: "SPACE", alert: false },
+  { term: "space surveillance", cat: "SPACE", alert: false },
+  { term: "artillery", cat: "FIRES", alert: false },
+  { term: "precision munition", cat: "FIRES", alert: false },
+  { term: "Pinaka", cat: "FIRES", alert: false },
+  { term: "BrahMos", cat: "FIRES", alert: false }
 ];
 
-var BUILD = "v13 · IST";
+/* Offered in WATCH, added one at a time — never applied automatically. */
+var RECOMMENDED = [
+  { term: "LAC", cat: "NORTHERN" },
+  { term: "India China border", cat: "NORTHERN" },
+  { term: "Ladakh", cat: "NORTHERN" },
+  { term: "Line of Control", cat: "WESTERN" },
+  { term: "LoC ceasefire", cat: "WESTERN" },
+  { term: "Indian Army", cat: "FORCE" },
+  { term: "defence procurement", cat: "PROCUREMENT" },
+  { term: "DRDO", cat: "PROCUREMENT" },
+  { term: "HAL", cat: "PROCUREMENT" },
+  { term: "AMCA", cat: "AIR" },
+  { term: "Ghatak drone", cat: "AIR" },
+  { term: "loitering munition", cat: "AIR" },
+  { term: "military satellite", cat: "SPACE" },
+  { term: "space surveillance", cat: "SPACE" },
+  { term: "ISRO launch", cat: "SPACE" },
+  { term: "artillery", cat: "FIRES" },
+  { term: "Pinaka", cat: "FIRES" },
+  { term: "precision munition", cat: "FIRES" },
+  { term: "BrahMos", cat: "FIRES" },
+  { term: "Agni missile", cat: "FIRES" },
+  { term: "submarine", cat: "MARITIME" },
+  { term: "Indian Ocean", cat: "MARITIME" }
+];
+
+var BUILD = "v16 · IST";
 
 var DEFAULT_RELAYS = [
   "https://corsproxy.io/?url=",
@@ -335,6 +373,7 @@ var DEFAULT_RELAYS = [
   "https://api.allorigins.win/raw?url=",
   "https://proxy.killcors.com/?url="
 ];
+var MAX_AGE_MS = 7 * 24 * 3600 * 1000;   /* nothing older than a week enters the feed */
 var FETCH_TIMEOUT = 8000;   /* nothing is allowed to stall the queue */
 var POOL_LIMIT = 5;         /* simultaneous requests */
 
@@ -421,15 +460,62 @@ function clampGrade(grade, typ) {
 
 var GRADE_RE = /^[A-F][1-6]$/;
 function words(t) { return t.toLowerCase().split(/\s+/).filter(function (x) { return x.length > 4; }); }
-/* A single loose word (e.g. "india" inside "LAC India China border") must not
-   tag an unrelated headline. Require the whole phrase, or at least two of its
-   distinct significant words, before counting it a match. */
+/* Words that carry no signal on their own. */
+var STOP = ("the a an and or of in on at to for with from by is are was were be been will "
+  + "has have had that this its it as but not new more than after before over under into out up down "
+  + "says said amid ahead first").split(" ");
+
+/* Words that are true but far too common in this domain to identify a story
+   by themselves — two of them together still counts. */
+var WEAK = ("india indian pakistan pakistani china chinese military defence defense army navy air "
+  + "force forces news report reports government minister ministry national security delhi beijing "
+  + "islamabad state country line system systems "
+  /* ambiguous outside this domain: "fires" is gunnery here but flames elsewhere,
+     "operations" and "exercise" are equally at home in civilian copy */
+  + "fire fires operation operations exercise exercises unit units").split(" ");
+
+function sigWords(term) {
+  return term.toLowerCase().split(/[^a-z0-9]+/)
+    .filter(function (w) { return w.length >= 3 && STOP.indexOf(w) === -1; });
+}
+/* An acronym written in caps in the keyword (LAC, LoC, UAV) is a strong
+   signal even though it is short. */
+function isStrong(word, term) {
+  if (WEAK.indexOf(word) > -1) return false;
+  if (word.length >= 5) return true;
+  return new RegExp("\\b" + word.toUpperCase() + "\\b").test(term);
+}
+/* Contiguous runs of two or more words from the keyword — "line of control",
+   "india china", "precision fires" — are decisive when they appear intact. */
+function phrases(term) {
+  var parts = term.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean), out = [], i, j;
+  for (i = 0; i < parts.length; i++)
+    for (j = i + 2; j <= Math.min(parts.length, i + 4); j++)
+      out.push(parts.slice(i, j).join(" "));
+  return out;
+}
+
 function matchesTerm(term, blob) {
-  var t = term.toLowerCase();
+  var t = term.toLowerCase().trim();
+  if (!t) return false;
   if (blob.indexOf(t) > -1) return true;
-  var w = words(term);
-  var hits = w.filter(function (x) { return blob.indexOf(x) > -1; }).length;
-  return w.length > 1 ? hits >= 2 : hits >= 1;
+
+  var mode = S.match || "balanced";
+  var words = sigWords(term);
+  if (!words.length) return false;
+
+  var strongHits = 0, weakHits = 0;
+  words.forEach(function (w) {
+    if (blob.indexOf(w) === -1) return;
+    if (isStrong(w, term)) strongHits++; else weakHits++;
+  });
+
+  var phraseHit = phrases(term).some(function (p) { return blob.indexOf(p) > -1; });
+
+  if (mode === "broad") return phraseHit || strongHits >= 1 || weakHits >= 1;
+  if (mode === "strict") return phraseHit || strongHits >= 2 || (strongHits >= 1 && weakHits >= 1);
+  /* balanced */
+  return phraseHit || strongHits >= 1 || weakHits >= 2;
 }
 
 /* tiny DOM builder */
@@ -453,7 +539,7 @@ function el(tag, attrs) {
 /* ---------------------------- state ------------------------------- */
 
 var S = {
-  tab: "feed", filter: "ALL", view: "cards", sort: "newest",
+  tab: "feed", filter: "ALL", view: "cards", sort: "newest", match: "balanced",
   watch: SEED.map(function (s) { return { id: hash(s.term), term: s.term, cat: s.cat, alert: s.alert, on: true }; }),
   feeds: DEFAULT_FEEDS.slice(),
   keys: { groq: "", gemini: "", openrouter: "" },
@@ -461,7 +547,7 @@ var S = {
   relays: DEFAULT_RELAYS.slice(),
   bestRelay: null,
   items: [], seen: [], lastScan: null, brief: "",
-  engine: {}, feedState: {}, relayState: {}, feedAdd: "", tagging: "",
+  engine: {}, feedState: {}, relayState: {}, feedAdd: "", tagging: "", lastSweepStats: null,
   briefSections: [], briefStatus: "",
   scanning: false, briefing: false, status: "", err: ""
 };
@@ -474,6 +560,7 @@ function load() {
       if (cfg.feeds && cfg.feeds.length) S.feeds = cfg.feeds;
       if (cfg.keys) Object.assign(S.keys, cfg.keys);
       if (cfg.chain && cfg.chain.length) S.chain = cfg.chain;
+      if (cfg.match) S.match = cfg.match;
       if (cfg.relays && cfg.relays.length) S.relays = cfg.relays;
       else if (cfg.proxy) S.relays = [cfg.proxy].concat(
         DEFAULT_RELAYS.filter(function (r) { return r !== cfg.proxy; }));
@@ -494,7 +581,7 @@ function load() {
 function saveCfg() {
   try {
     localStorage.setItem("mw:config", JSON.stringify(
-      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, relays: S.relays }));
+      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, relays: S.relays, match: S.match }));
   } catch (e) {}
 }
 function saveFeed() {
@@ -567,7 +654,7 @@ function pool(tasks, limit, onTick) {
 function gdelt(term) {
   var url = "https://api.gdeltproject.org/api/v2/doc/doc?query=" +
     encodeURIComponent(term + " sourcelang:english") +
-    "&mode=ArtList&maxrecords=12&timespan=4d&sort=datedesc&format=json";
+    "&mode=ArtList&maxrecords=20&timespan=4d&sort=datedesc&format=json";
   return getText(url).then(function (t) {
     var data = JSON.parse(t);
     return (data.articles || []).map(function (a) {
@@ -774,7 +861,7 @@ function sweep(onlyCat) {
   pool(tasks, POOL_LIMIT, function (d, tot) {
     setStatus("Collecting — " + d + " of " + tot + " sources · " + raw.length + " headlines");
   }).then(function () {
-    var tagged = [];
+    var tagged = [], dropIrrelevant = 0, dropOld = 0;
     raw.forEach(function (a) {
       if (!a.hl || !a.url) return;
       /* Every item earns its category by matching the keyword, whatever
@@ -787,10 +874,17 @@ function sweep(onlyCat) {
         : active;
       var hit = pool.find(function (w) { return matchesTerm(w.term, blob); });
       if (!hit && a.cat) hit = active.find(function (w) { return matchesTerm(w.term, blob); });
-      if (!hit) return;
+      if (!hit) { dropIrrelevant++; return; }
       var cat = hit.cat;
 
       var dom = a.src && a.src.indexOf(".") > -1 ? a.src : domainOf(a.url);
+
+      /* GDELT and Google News are windowed to 4 days, but outlet RSS returns
+         whatever the feed holds — which can be months old. Apply the same
+         window to everything so stale posts don't arrive marked NEW. */
+      var age = Date.now() - new Date(a.dt).getTime();
+      if (isFinite(age) && age > MAX_AGE_MS) { dropOld++; return; }
+
       tagged.push({ id: hash(canonUrl(a.url)), hl: a.hl.slice(0, 150), url: a.url,
                     src: a.src || dom, dt: a.dt, via: a.via, cat: cat, typ: classify(dom),
                     desc: (a.desc || "").slice(0, 400), img: a.img || "" });
@@ -817,8 +911,10 @@ function sweep(onlyCat) {
       return !knownId[a.id] && !knownTitle[titleKey(a.hl)];
     }).sort(function (a, b) {
       return (RANK[a.typ] - RANK[b.typ]) || String(b.dt).localeCompare(String(a.dt));
-    }).slice(0, 24);
+    }).slice(0, 40);
 
+    S.lastSweepStats = { collected: raw.length, kept: fresh.length,
+                         irrelevant: dropIrrelevant, old: dropOld };
     if (!fresh.length) {
       S.scanning = false; S.lastScan = new Date().toISOString(); setStatus("");
       var dead = liveFeeds.filter(function (f) {
@@ -827,7 +923,9 @@ function sweep(onlyCat) {
       S.err = dead >= liveFeeds.length
         ? "Every source failed. Open SETUP, tap Test relays, and switch to whichever one reports working."
         : (raw.length
-            ? "Collected " + raw.length + " headlines but none matched your keywords, or all of them were already in the feed. Try a broader term in WATCH."
+            ? "Collected " + raw.length + " headlines but kept none — " + dropIrrelevant +
+              " did not match your keywords and " + dropOld + " were older than a week. " +
+              "If that seems wrong, set Keyword matching to Broad in SETUP."
             : "Sweep finished but found nothing. Check SETUP — Test relays.");
       saveFeed(); render(); return;
     }
@@ -867,7 +965,13 @@ function sweep(onlyCat) {
             }));
           });
         }).catch(function (e) {
-          S.err = e.message + "  Headlines were still collected — add or check a key in SETUP, then sweep again.";
+          var why = S.chain.map(function (p) {
+            return (PROVIDERS[p] ? PROVIDERS[p].label : p) + ": " + (S.engine[p] || "not tried");
+          }).join(" · ");
+          var noKeys = !S.chain.some(function (p) { return S.keys[p]; });
+          S.err = noKeys
+            ? "No API key set, so nothing could be summarised. Open SETUP → Keys and paste a Groq key (console.groq.com → API Keys). Headlines were still collected."
+            : "Summarising failed — " + why + ". Headlines were still collected; fix the key in SETUP and tap Summarise missing.";
           batch.forEach(function (a) {
             done.push(Object.assign({}, a, { sum: "", pri: "routine", grd: GRADES[a.typ] }));
           });
@@ -886,6 +990,57 @@ function sweep(onlyCat) {
 }
 
 /* ---------------------------- brief ------------------------------- */
+
+/* Summarise items already in the feed that never got a summary — used when
+   the engine was missing or rate limited during the sweep. No re-fetching. */
+function summariseMissing() {
+  var pending = S.items.filter(function (i) { return !i.sum; });
+  if (!pending.length) { S.err = "Everything in the feed is already summarised."; render(); return; }
+  if (!S.chain.some(function (p) { return S.keys[p]; })) {
+    S.err = "No API key set. Open SETUP → Keys and paste a Groq key first.";
+    render(); return;
+  }
+  S.err = ""; S.scanning = true; S.engine = {}; render();
+
+  var batches = [], i;
+  for (i = 0; i < pending.length; i += 6) batches.push(pending.slice(i, i + 6));
+
+  batches.reduce(function (acc, batch, bi) {
+    return acc.then(function () {
+      setStatus("Summarising " + (bi + 1) + " of " + batches.length);
+      var list = batch.map(function (a, n) {
+        var extra = a.desc && a.desc.length > 20 ? " :: " + a.desc : "";
+        return (n + 1) + ". [" + a.src + "] " + a.hl + extra;
+      }).join("\n");
+      var prompt =
+"For each numbered item below, write a summary for a defence staff officer.\n\n" +
+"Every summary must be 24-30 words. Cover what happened, who is involved, and why it matters.\n" +
+"Where text follows a double colon, that is the source's own description — draw on it.\n" +
+"Where only a headline is given, expand on what the headline states and its significance, but do NOT invent names, figures, dates or events that are not implied by it.\n\n" +
+"Return ONLY a JSON array, no prose and no code fences, one object per item in the same order:\n" +
+'[{"n":1,"sum":"summary text","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
+'pri: "flash" only for a major breaking development, "priority" for significant, otherwise "routine".\n' +
+"grd: source reliability A-F then information credibility 1-6, judged from the outlet named in brackets.\n\n" +
+"ITEMS:\n" + list;
+      return runChain(prompt).then(function (out) {
+        var parsed = parseArray(out);
+        batch.forEach(function (a, n) {
+          var m = parsed.find(function (x) { return Number(x.n) === n + 1; }) || {};
+          if (!m.sum) return;
+          a.sum = String(m.sum).slice(0, 480);
+          a.pri = ["flash","priority","routine"].indexOf(m.pri) > -1 ? m.pri : "routine";
+          a.grd = clampGrade(m.grd, a.typ);
+        });
+        saveFeed(); render();
+      }, function () { /* keep going; the rest may still succeed */ });
+    });
+  }, Promise.resolve()).then(function () {
+    var left = S.items.filter(function (i) { return !i.sum; }).length;
+    S.scanning = false; setStatus("");
+    if (left) S.err = left + " item" + (left === 1 ? "" : "s") + " still unsummarised — the engine refused or rate limited. Try again shortly.";
+    saveFeed(); render();
+  });
+}
 
 function makeBrief() {
   var pool = S.items.filter(function (i) { return i.sum; });
@@ -1148,6 +1303,24 @@ function renderFeed(app) {
   }
   app.appendChild(bar);
 
+  var missing = S.items.filter(function (i) { return !i.sum; }).length;
+  if (missing) {
+    app.appendChild(el("div", { class: "alert" },
+      el("span", { class: "dot" }),
+      el("span", { class: "alert-t", text: missing + " item" + (missing === 1 ? "" : "s") + " not summarised" }),
+      el("button", { class: "link", disabled: S.scanning, text: "Summarise missing",
+        on: { click: function () { if (!S.scanning) summariseMissing(); } } })));
+  }
+
+  var st = S.lastSweepStats;
+  if (st && !S.scanning) {
+    app.appendChild(el("div", { class: "tally" },
+      el("span", { text: "Last sweep: " + st.collected + " collected · " + st.kept + " kept · " +
+        st.irrelevant + " off-keyword · " + st.old + " too old" }),
+      el("button", { class: "link", text: "Matching: " + (S.match || "balanced"),
+        on: { click: function () { S.tab = "setup"; render(); window.scrollTo(0, 0); } } })));
+  }
+
   if (S.items.length) {
     var cats = ["ALL"];
     S.items.forEach(function (i) { if (cats.indexOf(i.cat) === -1) cats.push(i.cat); });
@@ -1273,6 +1446,34 @@ function renderWatch(app) {
       el("button", { class: "addbtn", text: "Add", on: { click: add } })),
     S.tagging ? el("div", { class: "hint", text: "Assigning a category to \u201c" + S.tagging + "\u201d\u2026" }) : null,
     el("div", { class: "hint", text: "Leave the category blank and one is assigned automatically. ALERT raises the strip at the top of every tab whenever that keyword appears in something you have not read." })));
+  /* recommended, non-destructive */
+  var have = {};
+  S.watch.forEach(function (w) { have[w.term.toLowerCase()] = 1; });
+  var offer = RECOMMENDED.filter(function (r) { return !have[r.term.toLowerCase()]; });
+  if (offer.length) {
+    var rsec = el("div", { class: "sec" },
+      el("div", { class: "sec-h" },
+        el("span", { class: "sec-t", text: "Suggested keywords" }),
+        el("button", { class: "link", text: "Add all",
+          on: { click: function () {
+            offer.forEach(function (r) {
+              S.watch.push({ id: hash(r.term + r.cat), term: r.term, cat: r.cat, alert: false, on: true });
+            });
+            saveCfg(); render();
+          } } })));
+    var wrap = el("div", { class: "meta", style: "gap:7px" });
+    offer.forEach(function (r) {
+      wrap.appendChild(el("button", { class: "tag suggest", text: "+ " + r.term,
+        on: { click: function () {
+          S.watch.push({ id: hash(r.term + r.cat), term: r.term, cat: r.cat, alert: false, on: true });
+          saveCfg(); render();
+        } } }));
+    });
+    rsec.appendChild(wrap);
+    rsec.appendChild(el("div", { class: "hint", text:
+      "Short, distinctive terms match better than long phrases. Acronyms and proper nouns are strongest; words like India, defence or security appear in half of all news and narrow nothing. Tap to add — nothing is removed." }));
+    app.appendChild(rsec);
+  }
 }
 
 function renderBrief(app) {
@@ -1306,6 +1507,19 @@ function renderBrief(app) {
 }
 
 function renderSetup(app) {
+  /* keyword matching */
+  var msec = el("div", { class: "sec" },
+    el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Keyword matching" })));
+  var mgrp = el("div", { class: "grp" });
+  [["strict", "Strict"], ["balanced", "Balanced"], ["broad", "Broad"]].forEach(function (m) {
+    mgrp.appendChild(el("button", { class: "seg", "data-on": (S.match || "balanced") === m[0] ? "1" : "0",
+      text: m[1], on: { click: function () { S.match = m[0]; saveCfg(); render(); } } }));
+  });
+  msec.appendChild(el("div", { class: "viewbar", style: "padding:0" }, mgrp));
+  msec.appendChild(el("div", { class: "hint", text:
+    "How closely a headline must match a keyword to enter the feed. Broad keeps anything sharing a distinctive word; Strict wants two. If a category has gone quiet, widen this before rewriting your keywords." }));
+  app.appendChild(msec);
+
   /* engines */
   var sec = el("div", { class: "sec" },
     el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Summary engines" })));
