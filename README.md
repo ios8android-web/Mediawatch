@@ -62,9 +62,21 @@ No rebuild, no resubmission, no review.
 
 ## Reading the feed
 
+FEED has two layouts. **Cards** is the default — full summaries, one item per screen.
+**Timeline** is a chronological ticker across every category at once, grouped by day
+with a time-of-day stamp on each line, so you can see the shape of a busy day rather
+than reading it as a filtered stack. Both respect the category chips the same way.
+
 Each item carries a two-character grade — source reliability A–F, then information
 credibility 1–6. **These are the model's guess, not an assessment.** Treat them as a
 sorting aid and verify before use.
+
+Items marked **headline only** came from GDELT or Google News, which hand back a
+headline with no article body — the summary is one grounded sentence, not padding.
+Tap **Expand from source** to fetch the actual article and get a proper summary from
+real text. This is best-effort: page extraction is a blunt strip of the HTML, so a
+badly structured page can pull in menu text alongside the story, and some sites block
+it outright. If it fails, the original headline summary is kept, nothing is lost.
 
 `FLASH` and `PRIORITY` items, and anything matching an ALERT keyword, raise the strip
 at the top of every tab until you mark them read.
