@@ -365,7 +365,7 @@ var RECOMMENDED = [
   { term: "Indian Ocean", cat: "MARITIME" }
 ];
 
-var BUILD = "v16 · IST";
+var BUILD = "v17 · IST";
 
 var DEFAULT_RELAYS = [
   "https://corsproxy.io/?url=",
@@ -471,8 +471,10 @@ var WEAK = ("india indian pakistan pakistani china chinese military defence defe
   + "force forces news report reports government minister ministry national security delhi beijing "
   + "islamabad state country line system systems "
   /* ambiguous outside this domain: "fires" is gunnery here but flames elsewhere,
+     "control" belongs to Line of Control but also to aircraft controls,
      "operations" and "exercise" are equally at home in civilian copy */
-  + "fire fires operation operations exercise exercises unit units").split(" ");
+  + "fire fires operation operations exercise exercises unit units "
+  + "control controls attack attacks strike strikes range ranges").split(" ");
 
 function sigWords(term) {
   return term.toLowerCase().split(/[^a-z0-9]+/)
@@ -495,27 +497,64 @@ function phrases(term) {
   return out;
 }
 
-function matchesTerm(term, blob) {
+/* Score how well a keyword fits a headline. Used both to decide whether an
+   item is relevant at all and — where several keywords match — which one
+   owns it. Without scoring, the category came from list order. */
+/* Substring search was matching "LAC" inside "black" and "control" inside
+   "controls hit" — match on word boundaries, allowing only a plural s. */
+function hasWord(blob, w) {
+  var i = blob.indexOf(w);
+  while (i > -1) {
+    var before = i === 0 ? " " : blob.charAt(i - 1);
+    var end = i + w.length;
+    var after = end >= blob.length ? " " : blob.charAt(end);
+    if (!/[a-z0-9]/.test(before)) {
+      if (!/[a-z0-9]/.test(after)) return true;
+      /* allow a trailing plural: satellite -> satellites */
+      if (after === "s") {
+        var next = end + 1 >= blob.length ? " " : blob.charAt(end + 1);
+        if (!/[a-z0-9]/.test(next)) return true;
+      }
+    }
+    i = blob.indexOf(w, i + 1);
+  }
+  return false;
+}
+
+function scoreOn(term, blob) {
+  if (!blob) return 0;
   var t = term.toLowerCase().trim();
-  if (!t) return false;
-  if (blob.indexOf(t) > -1) return true;
+  if (!t) return 0;
+  if (hasWord(blob, t)) return 10;
 
-  var mode = S.match || "balanced";
-  var words = sigWords(term);
-  if (!words.length) return false;
-
-  var strongHits = 0, weakHits = 0;
-  words.forEach(function (w) {
-    if (blob.indexOf(w) === -1) return;
-    if (isStrong(w, term)) strongHits++; else weakHits++;
+  var score = 0;
+  phrases(term).forEach(function (p) { if (blob.indexOf(p) > -1) score += 4; });
+  sigWords(term).forEach(function (w) {
+    if (!hasWord(blob, w)) return;
+    score += isStrong(w, term) ? 2 : 1;
   });
+  return score;
+}
 
-  var phraseHit = phrases(term).some(function (p) { return blob.indexOf(p) > -1; });
+/* A match in the headline counts for more than one buried in the description. */
+function matchScore(term, hl, desc) {
+  return scoreOn(term, (hl || "").toLowerCase()) + 0.4 * scoreOn(term, (desc || "").toLowerCase());
+}
 
-  if (mode === "broad") return phraseHit || strongHits >= 1 || weakHits >= 1;
-  if (mode === "strict") return phraseHit || strongHits >= 2 || (strongHits >= 1 && weakHits >= 1);
-  /* balanced */
-  return phraseHit || strongHits >= 1 || weakHits >= 2;
+var MATCH_FLOOR = { broad: 1, balanced: 2, strict: 3 };
+
+function matchesTerm(term, blob) {
+  return scoreOn(term, blob) >= (MATCH_FLOOR[S.match || "balanced"]);
+}
+
+/* Best-matching keyword for an item, or null if nothing clears the floor. */
+function bestMatch(term_list, hl, desc) {
+  var floor = MATCH_FLOOR[S.match || "balanced"], best = null, bestScore = 0;
+  term_list.forEach(function (w) {
+    var s = matchScore(w.term, hl, desc);
+    if (s >= floor && s > bestScore) { bestScore = s; best = w; }
+  });
+  return best ? { w: best, score: bestScore } : null;
 }
 
 /* tiny DOM builder */
@@ -868,14 +907,16 @@ function sweep(onlyCat) {
          source it came from. GDELT's full-text search is loose and returns
          off-topic stories for a query; without this they inherited the
          category of whichever keyword happened to fetch them. */
-      var blob = (a.hl + " " + (a.desc || "")).toLowerCase();
-      var pool = a.cat
-        ? active.filter(function (w) { return w.cat === a.cat; })
-        : active;
-      var hit = pool.find(function (w) { return matchesTerm(w.term, blob); });
-      if (!hit && a.cat) hit = active.find(function (w) { return matchesTerm(w.term, blob); });
-      if (!hit) { dropIrrelevant++; return; }
-      var cat = hit.cat;
+      /* Every item earns its category by matching a keyword, whatever source
+         it came from — and the strongest match wins, not the first one. */
+      var pool = a.cat ? active.filter(function (w) { return w.cat === a.cat; }) : active;
+      var best = bestMatch(pool, a.hl, a.desc);
+      var allBest = bestMatch(active, a.hl, a.desc);
+      /* if some other keyword fits better than the one that fetched it,
+         that keyword owns the item */
+      if (!best || (allBest && allBest.score > best.score)) best = allBest;
+      if (!best) { dropIrrelevant++; return; }
+      var cat = best.w.cat;
 
       var dom = a.src && a.src.indexOf(".") > -1 ? a.src : domainOf(a.url);
 
@@ -887,7 +928,8 @@ function sweep(onlyCat) {
 
       tagged.push({ id: hash(canonUrl(a.url)), hl: a.hl.slice(0, 150), url: a.url,
                     src: a.src || dom, dt: a.dt, via: a.via, cat: cat, typ: classify(dom),
-                    desc: (a.desc || "").slice(0, 400), img: a.img || "" });
+                    desc: (a.desc || "").slice(0, 400), img: a.img || "",
+                    kw: best.w.term, kwScore: Math.round(best.score * 10) / 10 });
     });
 
     /* Collapse duplicates by canonical URL and by headline. Where the same
@@ -933,7 +975,7 @@ function sweep(onlyCat) {
     /* 4. summarise in batches of eight */
     var batches = [], i;
     for (i = 0; i < fresh.length; i += 6) batches.push(fresh.slice(i, i + 6));
-    var done = [];
+    var done = [], rejected = 0;
 
     var work = batches.reduce(function (acc, batch, bi) {
       return acc.then(function () {
@@ -942,15 +984,16 @@ function sweep(onlyCat) {
           var extra = a.desc && a.desc.length > 20 &&
             a.desc.toLowerCase().indexOf(a.hl.toLowerCase().slice(0, 30)) !== 0
             ? " :: " + a.desc : "";
-          return (n + 1) + ". [" + a.src + "] " + a.hl + extra;
+          return (n + 1) + ". [" + a.src + "] (watching for: " + (a.kw || a.cat) + ") " + a.hl + extra;
         }).join("\n");
         var prompt =
-"For each numbered item below, write a summary for a defence staff officer.\n\n" +
+"For each numbered item below, decide whether it genuinely concerns the topic in brackets, then write a summary for a defence staff officer.\n\n" +
+"Set \"rel\": false when the item only shares a word with the topic and is really about something else \u2014 domestic politics, sport, entertainment, business results, civil aviation incidents, mining or land disputes. Set \"rel\": true only if a staff officer watching that topic would want to see it.\n\n" +
 "Every summary must be 24-30 words. Cover what happened, who is involved, and why it matters.\n" +
 "Where text follows a double colon, that is the source's own description — draw on it.\n" +
 "Where only a headline is given, expand on what the headline states and its significance, but do NOT invent names, figures, dates or events that are not implied by it.\n\n" +
 "Return ONLY a JSON array, no prose and no code fences, one object per item in the same order:\n" +
-'[{"n":1,"sum":"summary text","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
+'[{"n":1,"rel":true,"sum":"summary text","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
 'pri: "flash" only for a major breaking development, "priority" for significant, otherwise "routine".\n' +
 "grd: source reliability A-F then information credibility 1-6, judged from the outlet named in brackets.\n\n" +
 "ITEMS:\n" + list;
@@ -958,6 +1001,7 @@ function sweep(onlyCat) {
           var parsed = parseArray(out);
           batch.forEach(function (a, n) {
             var m = parsed.find(function (x) { return Number(x.n) === n + 1; }) || {};
+            if (m.rel === false) { rejected++; return; }
             done.push(Object.assign({}, a, {
               sum: String(m.sum || "").slice(0, 480),
               pri: ["flash","priority","routine"].indexOf(m.pri) > -1 ? m.pri : "routine",
@@ -980,6 +1024,7 @@ function sweep(onlyCat) {
     }, Promise.resolve());
 
     return work.then(function () {
+      if (S.lastSweepStats) S.lastSweepStats.offTopic = rejected;
       S.items = done.concat(S.items).slice(0, 150);
       S.lastScan = new Date().toISOString();
       S.scanning = false; setStatus(""); saveFeed(); render();
@@ -1013,12 +1058,13 @@ function summariseMissing() {
         return (n + 1) + ". [" + a.src + "] " + a.hl + extra;
       }).join("\n");
       var prompt =
-"For each numbered item below, write a summary for a defence staff officer.\n\n" +
+"For each numbered item below, decide whether it genuinely concerns the topic in brackets, then write a summary for a defence staff officer.\n\n" +
+"Set \"rel\": false when the item only shares a word with the topic and is really about something else \u2014 domestic politics, sport, entertainment, business results, civil aviation incidents, mining or land disputes. Set \"rel\": true only if a staff officer watching that topic would want to see it.\n\n" +
 "Every summary must be 24-30 words. Cover what happened, who is involved, and why it matters.\n" +
 "Where text follows a double colon, that is the source's own description — draw on it.\n" +
 "Where only a headline is given, expand on what the headline states and its significance, but do NOT invent names, figures, dates or events that are not implied by it.\n\n" +
 "Return ONLY a JSON array, no prose and no code fences, one object per item in the same order:\n" +
-'[{"n":1,"sum":"summary text","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
+'[{"n":1,"rel":true,"sum":"summary text","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
 'pri: "flash" only for a major breaking development, "priority" for significant, otherwise "routine".\n' +
 "grd: source reliability A-F then information credibility 1-6, judged from the outlet named in brackets.\n\n" +
 "ITEMS:\n" + list;
@@ -1233,6 +1279,9 @@ function itemNode(it, isNew) {
       el("span", { class: "tag cat", text: it.cat }),
       el("span", { class: "tag", text: it.via }),
       it.pri !== "routine" ? el("span", { class: "tag pri", "data-p": it.pri, text: it.pri }) : null,
+      it.kw ? el("button", { class: "tag kw", title: "Matched this keyword — tap if wrong",
+        text: "\u2691 " + it.kw,
+        on: { click: function () { S.kwInfo = it.id; render(); } } }) : null,
       thin ? el("span", { style: "align-self:center;color:var(--mute)", text: "headline only" }) : null),
     thin ? el("button", { class: "expand", disabled: it.expanding,
         text: it.expanding ? "Fetching full article…" : "Expand from source ↓",
@@ -1316,7 +1365,8 @@ function renderFeed(app) {
   if (st && !S.scanning) {
     app.appendChild(el("div", { class: "tally" },
       el("span", { text: "Last sweep: " + st.collected + " collected · " + st.kept + " kept · " +
-        st.irrelevant + " off-keyword · " + st.old + " too old" }),
+        st.irrelevant + " off-keyword · " + st.old + " too old" +
+        (st.offTopic ? " · " + st.offTopic + " rejected on review" : "") }),
       el("button", { class: "link", text: "Matching: " + (S.match || "balanced"),
         on: { click: function () { S.tab = "setup"; render(); window.scrollTo(0, 0); } } })));
   }
