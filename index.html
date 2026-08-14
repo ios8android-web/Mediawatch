@@ -117,6 +117,10 @@ h1::before{content:"";display:inline-block;width:8px;height:8px;background:var(-
 .new{margin-left:auto;font-size:9.5px;font-weight:700;letter-spacing:.1em;color:var(--accent);
   background:var(--accent-soft);padding:3px 8px;border-radius:20px}
 .hl-link{display:block;text-decoration:none;color:inherit}
+.hl-wrap{display:flex;gap:12px;align-items:flex-start}
+.hl-wrap .hl{flex:1;min-width:0}
+.thumb{flex:none;width:76px;height:76px;object-fit:cover;border-radius:12px;
+  background:var(--panel);margin-top:1px}
 .hl{font-family:var(--disp);font-size:17px;font-weight:700;line-height:1.32;margin:0 0 8px;
   letter-spacing:-.015em;color:var(--text)}
 .sum{font-size:14px;line-height:1.58;color:var(--text2);margin:0 0 12px}
@@ -192,6 +196,7 @@ input::placeholder{color:var(--mute)}
 .st[data-s="bad"]{background:var(--flash-bg);color:var(--flash-fg)}
 .st[data-s="idle"]{background:var(--panel);color:var(--mute)}
 
+.brief-body{font-size:14.5px;line-height:1.7;white-space:pre-wrap;color:var(--text2)}
 .brief{margin:12px 16px;padding:20px;background:var(--surface);border-radius:var(--r);
   box-shadow:var(--shadow);font-size:14.5px;line-height:1.7;white-space:pre-wrap;color:var(--text2)}
 .empty{margin:12px 16px;padding:44px 26px;text-align:center;color:var(--mute);font-size:13.5px;
@@ -322,10 +327,13 @@ var SEED = [
   { term: "artillery precision fires rocket", cat: "FIRES", alert: false }
 ];
 
+var BUILD = "v12 · IST";
+
 var DEFAULT_RELAYS = [
-  "https://api.codetabs.com/v1/proxy?quest=",
+  "https://corsproxy.io/?url=",
+  "https://api.codetabs.com/v1/proxy/?quest=",
   "https://api.allorigins.win/raw?url=",
-  "https://corsproxy.io/?url="
+  "https://proxy.killcors.com/?url="
 ];
 var FETCH_TIMEOUT = 8000;   /* nothing is allowed to stall the queue */
 var POOL_LIMIT = 5;         /* simultaneous requests */
@@ -334,15 +342,22 @@ var POOL_LIMIT = 5;         /* simultaneous requests */
 
 var MON = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
 function p2(n) { return String(n).padStart(2, "0"); }
+/* All times shown in India Standard Time (UTC+5:30). Stored timestamps stay
+   ISO/UTC internally; only display is converted. */
+var IST_OFFSET = 5.5 * 3600 * 1000;
+function toIST(d) { return new Date(d.getTime() + IST_OFFSET); }
+
 function dtg(d) {
-  if (!(d instanceof Date) || isNaN(d)) return "------Z";
-  return p2(d.getUTCDate()) + p2(d.getUTCHours()) + p2(d.getUTCMinutes()) + "Z " +
-         MON[d.getUTCMonth()] + " " + String(d.getUTCFullYear()).slice(2);
+  if (!(d instanceof Date) || isNaN(d)) return "------ IST";
+  var i = toIST(d);
+  return p2(i.getUTCDate()) + p2(i.getUTCHours()) + p2(i.getUTCMinutes()) + " IST " +
+         MON[i.getUTCMonth()] + " " + String(i.getUTCFullYear()).slice(2);
 }
 function dayStamp(iso) {
   var d = new Date(iso);
   if (isNaN(d)) return "DATE UNK";
-  return p2(d.getUTCDate()) + " " + MON[d.getUTCMonth()] + " " + String(d.getUTCFullYear()).slice(2);
+  var i = toIST(d);
+  return p2(i.getUTCDate()) + " " + MON[i.getUTCMonth()] + " " + String(i.getUTCFullYear()).slice(2);
 }
 function hash(s) {
   var h = 5381;
@@ -365,7 +380,9 @@ function gdeltISO(s) {
 }
 function timeStamp(iso) {
   var d = new Date(iso);
-  return isNaN(d) ? "----Z" : p2(d.getUTCHours()) + p2(d.getUTCMinutes()) + "Z";
+  if (isNaN(d)) return "----";
+  var i = toIST(d);
+  return p2(i.getUTCHours()) + p2(i.getUTCMinutes());
 }
 var GRADE_RE = /^[A-F][1-6]$/;
 function words(t) { return t.toLowerCase().split(/\s+/).filter(function (x) { return x.length > 4; }); }
@@ -409,7 +426,8 @@ var S = {
   relays: DEFAULT_RELAYS.slice(),
   bestRelay: null,
   items: [], seen: [], lastScan: null, brief: "",
-  engine: {}, feedState: {}, relayState: {},
+  engine: {}, feedState: {}, relayState: {}, feedAdd: "", tagging: "",
+  briefSections: [], briefStatus: "",
   scanning: false, briefing: false, status: "", err: ""
 };
 
@@ -424,11 +442,17 @@ function load() {
       if (cfg.relays && cfg.relays.length) S.relays = cfg.relays;
       else if (cfg.proxy) S.relays = [cfg.proxy].concat(
         DEFAULT_RELAYS.filter(function (r) { return r !== cfg.proxy; }));
+      /* pick up newly added or corrected defaults without discarding
+         whatever order the user has settled on */
+      DEFAULT_RELAYS.forEach(function (r) {
+        if (S.relays.indexOf(r) === -1) S.relays.push(r);
+      });
     }
     var f = JSON.parse(localStorage.getItem("mw:feed") || "null");
     if (f) {
       S.items = f.items || []; S.seen = f.seen || [];
       S.lastScan = f.lastScan || null; S.brief = f.brief || "";
+      S.briefSections = f.briefSections || [];
     }
   } catch (e) { /* corrupt or unavailable storage — start clean */ }
 }
@@ -441,7 +465,7 @@ function saveCfg() {
 function saveFeed() {
   try {
     localStorage.setItem("mw:feed", JSON.stringify(
-      { items: S.items, seen: S.seen, lastScan: S.lastScan, brief: S.brief }));
+      { items: S.items, seen: S.seen, lastScan: S.lastScan, brief: S.brief, briefSections: S.briefSections }));
   } catch (e) {}
 }
 
@@ -513,6 +537,7 @@ function gdelt(term) {
     var data = JSON.parse(t);
     return (data.articles || []).map(function (a) {
       return { hl: a.title || "", url: a.url || "", src: a.domain || domainOf(a.url),
+               img: (a.socialimage && String(a.socialimage).indexOf("http") === 0) ? a.socialimage : "",
                dt: gdeltISO(a.seendate), via: "GDELT" };
     });
   });
@@ -527,6 +552,77 @@ function stripHtml(s) {
     .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
     .replace(/\s+/g, " ").trim();
+}
+
+/* Pull a usable thumbnail: media:thumbnail / media:content / enclosure,
+   else the first <img> inside the description or content:encoded. */
+function rssImage(n, rawDesc) {
+  function attr(tag, a) {
+    var e = n.getElementsByTagName(tag)[0];
+    return e ? (e.getAttribute(a) || "") : "";
+  }
+  var u = attr("media:thumbnail", "url") || attr("media:content", "url");
+  if (!u) {
+    var enc = n.querySelector("enclosure");
+    if (enc && /image/i.test(enc.getAttribute("type") || "")) u = enc.getAttribute("url") || "";
+  }
+  if (!u && rawDesc) {
+    var m = rawDesc.match(/<img[^>]+src=["']([^"']+)["']/i);
+    if (m) u = m[1];
+  }
+  if (!u) return "";
+  if (u.indexOf("//") === 0) u = "https:" + u;
+  return u.indexOf("http") === 0 ? u : "";
+}
+
+/* Accepts a plain site address (bbc.com) and finds its actual feed:
+   tries the URL as-is, then any <link rel=alternate> the page declares,
+   then the usual suffixes. */
+function normaliseUrl(u) {
+  u = String(u || "").trim();
+  if (!u) return "";
+  if (u.indexOf("http") !== 0) u = "https://" + u.replace(/^\/+/, "");
+  return u;
+}
+function looksLikeFeed(txt) {
+  return /<(rss|feed|rdf:RDF)[\s>]/i.test(txt.slice(0, 2000));
+}
+function discoverFeed(input) {
+  var base = normaliseUrl(input);
+  if (!base) return Promise.reject(new Error("enter a web address"));
+
+  return getText(base).then(function (txt) {
+    if (looksLikeFeed(txt)) return base;
+
+    /* page declares its feed */
+    var m = txt.match(/<link[^>]+rel=["']alternate["'][^>]*>/gi) || [];
+    for (var i = 0; i < m.length; i++) {
+      if (!/type=["'][^"']*(rss|atom)[^"']*["']/i.test(m[i])) continue;
+      var href = (m[i].match(/href=["']([^"']+)["']/i) || [])[1];
+      if (!href) continue;
+      if (href.indexOf("//") === 0) href = "https:" + href;
+      else if (href.indexOf("http") !== 0) {
+        try { href = new URL(href, base).href; } catch (e) { continue; }
+      }
+      return href;
+    }
+    throw new Error("no feed declared");
+  }).catch(function () {
+    /* fall back to common feed paths */
+    var root;
+    try { root = new URL(base).origin; } catch (e) { throw new Error("not a valid address"); }
+    var paths = ["/feed", "/rss", "/feed/", "/rss.xml", "/feeds/rss.xml", "/index.xml"];
+    var i = 0;
+    function tryNext() {
+      if (i >= paths.length) throw new Error("no feed found at that address");
+      var candidate = root + paths[i++];
+      return getText(candidate).then(function (t) {
+        if (looksLikeFeed(t)) return candidate;
+        return tryNext();
+      }, tryNext);
+    }
+    return tryNext();
+  });
 }
 
 function parseRss(xml, defaultSrc) {
@@ -547,11 +643,13 @@ function parseRss(xml, defaultSrc) {
     }
     var descEl = n.querySelector("description") || n.querySelector("summary");
     var ce = n.getElementsByTagName("content:encoded")[0];
-    var desc = stripHtml((descEl && descEl.textContent) || (ce && ce.textContent) || "").slice(0, 400);
+    var rawDesc = (descEl && descEl.textContent) || (ce && ce.textContent) || "";
+    var desc = stripHtml(rawDesc).slice(0, 400);
     var pd = n.querySelector("pubDate"), up = n.querySelector("updated");
     var raw = (pd && pd.textContent) || (up && up.textContent) || "";
     var d = new Date(raw);
     return { hl: hl, url: url, src: src || domainOf(url), desc: desc,
+             img: rssImage(n, rawDesc),
              dt: isNaN(d) ? new Date().toISOString() : d.toISOString(),
              via: defaultSrc ? "RSS" : "GNEWS" };
   });
@@ -654,7 +752,7 @@ function sweep(onlyCat) {
       var dom = a.src && a.src.indexOf(".") > -1 ? a.src : domainOf(a.url);
       tagged.push({ id: hash(a.url), hl: a.hl.slice(0, 150), url: a.url,
                     src: a.src || dom, dt: a.dt, via: a.via, cat: cat, typ: classify(dom),
-                    desc: (a.desc || "").slice(0, 400) });
+                    desc: (a.desc || "").slice(0, 400), img: a.img || "" });
     });
 
     var map = {}, fresh = [];
@@ -693,9 +791,10 @@ function sweep(onlyCat) {
           return (n + 1) + ". [" + a.src + "] " + a.hl + extra;
         }).join("\n");
         var prompt =
-"For each numbered item below, write a summary for a defence staff officer. Use ONLY the information given — do not invent names, figures or context that are not present.\n\n" +
-"Where text follows a double colon, that is the source's own description — use it and write 35-55 words covering what happened, who is involved, and why it matters.\n" +
-"Where an item has only a headline, write one grounded sentence of 15-25 words that stays close to the headline. Do not pad it with speculation.\n\n" +
+"For each numbered item below, write a summary for a defence staff officer.\n\n" +
+"Every summary must be 24-30 words. Cover what happened, who is involved, and why it matters.\n" +
+"Where text follows a double colon, that is the source's own description — draw on it.\n" +
+"Where only a headline is given, expand on what the headline states and its significance, but do NOT invent names, figures, dates or events that are not implied by it.\n\n" +
 "Return ONLY a JSON array, no prose and no code fences, one object per item in the same order:\n" +
 '[{"n":1,"sum":"summary text","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
 'pri: "flash" only for a major breaking development, "priority" for significant, otherwise "routine".\n' +
@@ -734,27 +833,105 @@ function sweep(onlyCat) {
 /* ---------------------------- brief ------------------------------- */
 
 function makeBrief() {
-  var pool = S.items.filter(function (i) { return i.sum; }).slice(0, 22);
+  var pool = S.items.filter(function (i) { return i.sum; });
   if (!pool.length) { S.err = "Nothing summarised to brief on. Run a sweep first."; render(); return; }
-  S.err = ""; S.briefing = true; S.tab = "brief"; render();
+  S.err = ""; S.briefing = true; S.tab = "brief"; S.brief = ""; S.briefSections = []; render();
 
-  var lines = pool.map(function (i) {
-    return "[" + i.cat + "] " + i.hl + " (" + i.src + ") — " + i.sum;
-  }).join("\n");
+  /* group by category, densest first */
+  var groups = {};
+  pool.forEach(function (i) { (groups[i.cat] = groups[i.cat] || []).push(i); });
+  var cats = Object.keys(groups).sort(function (a, b) { return groups[b].length - groups[a].length; });
 
-  var prompt =
-"Compile a media brief for a staff officer from the items below. Plain text, no markdown symbols, under 180 words.\n\n" +
-"BOTTOM LINE\nTwo sentences on the overall picture.\n\n" +
-"DEVELOPMENTS\nThree or four single-line points, each naming the driver and the so-what.\n\n" +
-"WATCH\nOne line on what to track over the next 72 hours.\n\n" +
-"Be specific. If the items do not support a judgement, say so.\n\nITEMS:\n" + lines;
+  var sections = [];
+  var work = cats.reduce(function (acc, cat, ci) {
+    return acc.then(function () {
+      S.briefStatus = "Writing " + cat + " — " + (ci + 1) + " of " + cats.length;
+      render();
+      var lines = groups[cat].slice(0, 12).map(function (i) {
+        return "- " + i.hl + " (" + i.src + ") :: " + i.sum;
+      }).join("\n");
+      var prompt =
+"Write one section of a media brief for a defence staff officer, covering the category " + cat + ".\n\n" +
+"Write approximately 100 words as flowing prose — not bullet points, not a list of headlines. Draw the items together into a coherent picture: what is happening, what is driving it, and what it means. Where items relate, connect them. Where they do not, say so plainly rather than forcing a link.\n\n" +
+"Use only the material given. Do not invent figures, dates or attributions. Plain text only, no markdown symbols, no heading — the heading is added separately.\n\n" +
+"ITEMS:\n" + lines;
+      return runChain(prompt).then(function (out) {
+        sections.push({ cat: cat, n: groups[cat].length, text: out.trim() });
+      }, function (e) {
+        sections.push({ cat: cat, n: groups[cat].length,
+                        text: "Section not generated — " + (e.message || "engine unavailable") + "." });
+      });
+    });
+  }, Promise.resolve());
 
-  runChain(prompt).then(function (out) {
-    S.brief = out.trim(); S.briefing = false; saveFeed(); render();
-  }).catch(function (e) {
-    S.err = e.message; S.briefing = false; render();
+  work.then(function () {
+    /* bottom line drawn across the finished sections */
+    S.briefStatus = "Writing bottom line";
+    render();
+    var digest = sections.map(function (s) { return s.cat + ": " + s.text; }).join("\n\n");
+    var prompt =
+"Below are the sections of a media brief. Write a BOTTOM LINE of two or three sentences giving the overall picture across all of them, then a single line headed WATCH naming what to track over the next 72 hours.\n\n" +
+"Plain text, no markdown symbols. Be specific. If the material does not support a judgement, say so.\n\n" + digest;
+    return runChain(prompt).then(function (out) {
+      S.brief = out.trim();
+    }, function () { S.brief = ""; });
+  }).then(function () {
+    S.briefSections = sections;
+    S.briefStatus = ""; S.briefing = false; saveFeed(); render();
   });
 }
+
+/* ---------------------------- auto-tagging ------------------------ */
+
+var TAG_RULES = [
+  ["SPACE",       ["satellite","space","orbit","isro","launch vehicle","spacecraft","sda"]],
+  ["AIR",         ["drone","uav","ucav","aircraft","fighter","air force","helicopter","airbase","loitering"]],
+  ["MARITIME",    ["navy","naval","maritime","submarine","warship","carrier","indian ocean","port"]],
+  ["CYBER",       ["cyber","hacking","malware","ransomware","network attack","data breach"]],
+  ["FIRES",       ["artillery","rocket","missile","howitzer","precision fire","mlrs"]],
+  ["NORTHERN",    ["china","lac","ladakh","arunachal","tibet","pla"]],
+  ["WESTERN",     ["pakistan","loc","line of control","pok","jammu","kashmir"]],
+  ["PROCUREMENT", ["procurement","contract","tender","acquisition","rfi","rfp","defence deal"]],
+  ["TECH",        ["artificial intelligence"," ai ","machine learning","quantum","semiconductor","autonomy"]],
+  ["FORCE",       ["army","infantry","brigade","division","exercise","troops","regiment"]]
+];
+
+function localTag(term) {
+  var t = " " + term.toLowerCase() + " ";
+  for (var i = 0; i < TAG_RULES.length; i++) {
+    var cat = TAG_RULES[i][0], keys = TAG_RULES[i][1];
+    for (var j = 0; j < keys.length; j++) {
+      if (t.indexOf(keys[j]) > -1) return cat;
+    }
+  }
+  return "";
+}
+
+/* Ask the engine to place the term against categories already in use,
+   falling back to the rule set and finally to GENERAL. */
+function autoTag(term) {
+  var existing = [];
+  S.watch.forEach(function (w) { if (existing.indexOf(w.cat) === -1) existing.push(w.cat); });
+  var guess = localTag(term);
+
+  var hasEngine = S.chain.some(function (p) { return S.keys[p]; });
+  if (!hasEngine) return Promise.resolve(guess || "GENERAL");
+
+  var prompt =
+"Assign one short category tag to this news watch keyword, for a defence staff officer.\n\n" +
+"KEYWORD: " + term + "\n\n" +
+"Existing tags in use: " + (existing.join(", ") || "none") + "\n\n" +
+"Reuse an existing tag if it genuinely fits. Otherwise invent one.\n" +
+"Reply with ONLY the tag: one word, uppercase, maximum 12 characters. No punctuation, no explanation.";
+
+  return runChain(prompt).then(function (out) {
+    var tag = String(out || "").trim().toUpperCase().replace(/[^A-Z0-9 ]/g, "").split(/\s+/)[0];
+    return (tag && tag.length <= 14) ? tag : (guess || "GENERAL");
+  }, function () {
+    return guess || "GENERAL";
+  });
+}
+
 
 /* ---------------------------- relay test -------------------------- */
 
@@ -830,7 +1007,15 @@ function itemNode(it, isNew) {
       el("span", { class: "stamp", text: dayStamp(it.dt) }),
       isNew ? el("span", { class: "new", text: "NEW" }) : null),
     el("a", { class: "hl-link", href: it.url || "#", target: "_blank", rel: "noreferrer" },
-      el("h3", { class: "hl", text: it.hl })),
+      el("div", { class: "hl-wrap" },
+        el("h3", { class: "hl", text: it.hl }),
+        it.img ? (function () {
+          var im = el("img", { class: "thumb", src: it.img, alt: "", loading: "lazy" });
+          im.addEventListener("error", function () {
+            if (im.parentNode) im.parentNode.removeChild(im);
+          });
+          return im;
+        })() : null)),
     el("p", { class: "sum", "data-raw": it.sum ? "0" : "1",
       text: it.sum || "Not summarised — no engine answered on the last sweep." }),
     el("div", { class: "meta" },
@@ -851,8 +1036,8 @@ function render() {
 
   /* header */
   var tabs = el("nav", { class: "tabs" });
-  [["feed","Feed",S.items.length],["watch","Watch",S.watch.filter(function(w){return w.on;}).length],
-   ["brief","Brief",0],["setup","Setup",0]].forEach(function (t) {
+  [["feed","Feed",S.items.length],["brief","Brief",0],
+   ["watch","Watch",S.watch.filter(function(w){return w.on;}).length],["setup","Setup",0]].forEach(function (t) {
     tabs.appendChild(el("button", { class: "tab", "data-on": S.tab === t[0] ? "1" : "0",
       on: { click: function () { S.tab = t[0]; render(); window.scrollTo(0, 0); } } },
       t[1], t[2] > 0 ? el("i", { text: String(t[2]) }) : null));
@@ -977,7 +1162,7 @@ function renderTimeline(app, list) {
   });
   app.appendChild(wrap);
   app.appendChild(el("div", { class: "legend", text:
-    "Times are UTC (Z). Tap any line to open the source." }));
+    "Times are India Standard Time. Tap any line to open the source." }));
 }
 
 function renderWatch(app) {
@@ -1005,13 +1190,23 @@ function renderWatch(app) {
   });
 
   var tIn = el("input", { placeholder: "What to look for", value: "" });
-  var cIn = el("input", { placeholder: "Category", value: "" });
+  var cIn = el("input", { placeholder: "Category (leave blank to auto-assign)", value: "" });
   function add() {
     var term = tIn.value.trim();
     if (!term) return;
-    var cat = (cIn.value.trim() || "GENERAL").toUpperCase().slice(0, 14);
-    S.watch.push({ id: hash(term + cat), term: term, cat: cat, alert: false, on: true });
-    saveCfg(); render();
+    var typed = cIn.value.trim();
+    if (typed) {
+      var c = typed.toUpperCase().slice(0, 14);
+      S.watch.push({ id: hash(term + c), term: term, cat: c, alert: false, on: true });
+      saveCfg(); render();
+      return;
+    }
+    S.tagging = term;
+    render();
+    autoTag(term).then(function (cat) {
+      S.watch.push({ id: hash(term + cat), term: term, cat: cat, alert: false, on: true });
+      S.tagging = ""; saveCfg(); render();
+    });
   }
   tIn.addEventListener("keydown", function (e) { if (e.key === "Enter") add(); });
   cIn.addEventListener("keydown", function (e) { if (e.key === "Enter") add(); });
@@ -1021,7 +1216,8 @@ function renderWatch(app) {
     tIn,
     el("div", { class: "add" }, cIn,
       el("button", { class: "addbtn", text: "Add", on: { click: add } })),
-    el("div", { class: "hint", text: "ALERT raises the strip at the top of every tab whenever that keyword appears in something you have not read." })));
+    S.tagging ? el("div", { class: "hint", text: "Assigning a category to \u201c" + S.tagging + "\u201d\u2026" }) : null,
+    el("div", { class: "hint", text: "Leave the category blank and one is assigned automatically. ALERT raises the strip at the top of every tab whenever that keyword appears in something you have not read." })));
 }
 
 function renderBrief(app) {
@@ -1029,13 +1225,29 @@ function renderBrief(app) {
     el("button", { class: "sweep", disabled: S.briefing || S.scanning,
       text: S.briefing ? "Compiling" : "Compile brief",
       on: { click: function () { if (!S.briefing && !S.scanning) makeBrief(); } } }),
-    el("span", { class: "scan-msg", text: S.briefing ? "Reading the feed…"
+    el("span", { class: "scan-msg", text: S.briefing ? (S.briefStatus || "Reading the feed…")
       : S.items.filter(function (i) { return i.sum; }).length + " summarised items in scope" })));
   if (S.briefing) app.appendChild(el("div", { class: "prog" }, el("i")));
-  if (S.brief) app.appendChild(el("div", { class: "brief", text: S.brief }));
-  else if (!S.briefing) app.appendChild(el("div", { class: "empty" },
+
+  var secs = S.briefSections || [];
+  if (S.brief || secs.length) {
+    if (S.brief) {
+      app.appendChild(el("div", { class: "sec" },
+        el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Bottom line" })),
+        el("div", { class: "brief-body", text: S.brief })));
+    }
+    secs.forEach(function (s) {
+      app.appendChild(el("div", { class: "sec" },
+        el("div", { class: "sec-h" },
+          el("span", { class: "sec-t", text: s.cat }),
+          el("span", { class: "tag", text: s.n + (s.n === 1 ? " item" : " items") })),
+        el("div", { class: "brief-body", text: s.text })));
+    });
+    return;
+  }
+  if (!S.briefing) app.appendChild(el("div", { class: "empty" },
     el("b", { text: "No brief compiled" }),
-    "Compile brief reads the summarised feed and returns a bottom line, the developments that matter, and what to track next."));
+    "Compile brief writes about 100 words on each category in your feed, then a bottom line drawn across all of them."));
 }
 
 function renderSetup(app) {
@@ -1107,16 +1319,31 @@ function renderSetup(app) {
         on: { click: function () {
           S.feeds = S.feeds.filter(function (y) { return y.id !== f.id; }); saveCfg(); render(); } } })));
   });
-  var fIn = el("input", { class: "mono", placeholder: "https://…/feed" });
+  var fIn = el("input", { class: "mono", placeholder: "bbc.com  or  site.com/feed" });
   function addFeed() {
-    var url = fIn.value.trim();
-    if (url.indexOf("http") !== 0) return;
-    S.feeds.push({ id: hash(url), name: domainOf(url), url: url, on: true });
-    saveCfg(); render();
+    var raw = fIn.value.trim();
+    if (!raw) return;
+    S.feedAdd = "Looking for a feed at " + raw + "…";
+    render();
+    discoverFeed(raw).then(function (feedUrl) {
+      if (S.feeds.some(function (f) { return f.url === feedUrl; })) {
+        S.feedAdd = "Already added: " + feedUrl;
+      } else {
+        S.feeds.push({ id: hash(feedUrl), name: domainOf(feedUrl), url: feedUrl, on: true });
+        S.feedAdd = "Added " + feedUrl;
+        saveCfg();
+      }
+      render();
+    }, function (e) {
+      S.feedAdd = "Could not find a feed — " + (e.message || "unreachable") +
+        ". Try the feed address directly, e.g. feeds.bbci.co.uk/news/world/rss.xml";
+      render();
+    });
   }
   fIn.addEventListener("keydown", function (e) { if (e.key === "Enter") addFeed(); });
   fsec.appendChild(el("div", { class: "add" }, fIn,
     el("button", { class: "addbtn", text: "Add", on: { click: addFeed } })));
+  if (S.feedAdd) fsec.appendChild(el("div", { class: "hint", text: S.feedAdd }));
   fsec.appendChild(el("div", { class: "hint", text:
     "Feed addresses change without warning. After each sweep every line shows how many items it returned, so anything reading unreachable can be replaced or switched off." }));
   app.appendChild(fsec);
@@ -1165,6 +1392,27 @@ function renderSetup(app) {
         try { localStorage.removeItem("mw:config"); localStorage.removeItem("mw:feed"); } catch (e) {}
         location.reload();
       } } }))));
+
+  /* build + update */
+  app.appendChild(el("div", { class: "sec" },
+    el("div", { class: "sec-h" },
+      el("span", { class: "sec-t", text: "Build" }),
+      el("span", { class: "st", "data-s": "idle", text: BUILD })),
+    el("div", { class: "hint", text:
+      "Check this after publishing an update. If it still shows the old build, tap below to discard the cached copy and pull the current one." }),
+    el("div", { class: "add" },
+      el("button", { class: "addbtn", text: "Force update", on: { click: function () {
+        var done = function () { location.reload(true); };
+        if (!("caches" in window)) return done();
+        caches.keys().then(function (ks) {
+          return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+        }).then(function () {
+          if (!("serviceWorker" in navigator)) return;
+          return navigator.serviceWorker.getRegistrations().then(function (rs) {
+            return Promise.all(rs.map(function (r) { return r.unregister(); }));
+          });
+        }).then(done, done);
+      } } }))));
 }
 
 /* ---------------------------- boot -------------------------------- */
@@ -1180,7 +1428,26 @@ setInterval(function () {
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", function () {
-    navigator.serviceWorker.register("sw.js").catch(function () {});
+    /* updateViaCache:"none" stops Safari serving sw.js itself from HTTP cache —
+       without it a new build is never even discovered, which is why updates
+       previously needed the icon deleted and website data cleared by hand. */
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" })
+      .then(function (reg) {
+        reg.update();
+        /* check again whenever the app is reopened from the background */
+        document.addEventListener("visibilitychange", function () {
+          if (!document.hidden) reg.update();
+        });
+      })
+      .catch(function () {});
+
+    /* when a new worker takes control, reload once so the fresh build shows */
+    var reloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (reloaded) return;
+      reloaded = true;
+      location.reload();
+    });
   });
 }
 </script>
