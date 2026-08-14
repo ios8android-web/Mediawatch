@@ -327,7 +327,7 @@ var SEED = [
   { term: "artillery precision fires rocket", cat: "FIRES", alert: false }
 ];
 
-var BUILD = "v12 · IST";
+var BUILD = "v13 · IST";
 
 var DEFAULT_RELAYS = [
   "https://corsproxy.io/?url=",
@@ -384,6 +384,41 @@ function timeStamp(iso) {
   var i = toIST(d);
   return p2(i.getUTCHours()) + p2(i.getUTCMinutes());
 }
+/* Strip the parts of a URL that differ without changing the article, so the
+   same story fetched twice does not appear twice. */
+function canonUrl(u) {
+  var s = String(u || "").trim().toLowerCase();
+  s = s.replace(/^https?:\/\//, "").replace(/^www\./, "");
+  s = s.split("#")[0];
+  var q = s.indexOf("?");
+  if (q > -1) {
+    var base = s.slice(0, q);
+    var kept = s.slice(q + 1).split("&").filter(function (p) {
+      var k = p.split("=")[0];
+      return k && !/^(utm_|fbclid|gclid|igshid|ref|ref_src|source|cmpid|at_)/.test(k);
+    });
+    s = base + (kept.length ? "?" + kept.sort().join("&") : "");
+  }
+  return s.replace(/\/+$/, "");
+}
+
+/* Same headline from two outlets or two feeds is still one story. */
+function titleKey(t) {
+  return String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 70);
+}
+
+/* The model guesses grades from the outlet name and often over-rates domains
+   it has never heard of. Reliability (the letter) is anchored to what we
+   actually know about the source; credibility (the digit) stays its call. */
+var MIN_RELIABILITY = { wire: "A", indian: "B", defence: "B", other: "D" };
+function clampGrade(grade, typ) {
+  var g = String(grade || "").toUpperCase();
+  if (!GRADE_RE.test(g)) return GRADES[typ];
+  var floor = MIN_RELIABILITY[typ] || "D";
+  var letter = g.charAt(0) < floor ? floor : g.charAt(0);
+  return letter + g.charAt(1);
+}
+
 var GRADE_RE = /^[A-F][1-6]$/;
 function words(t) { return t.toLowerCase().split(/\s+/).filter(function (x) { return x.length > 4; }); }
 /* A single loose word (e.g. "india" inside "LAC India China border") must not
@@ -742,26 +777,47 @@ function sweep(onlyCat) {
     var tagged = [];
     raw.forEach(function (a) {
       if (!a.hl || !a.url) return;
-      var cat = a.cat;
-      if (!cat) {
-        var blob = a.hl.toLowerCase();
-        var hit = active.find(function (w) { return matchesTerm(w.term, blob); });
-        if (!hit) return;
-        cat = hit.cat;
-      }
+      /* Every item earns its category by matching the keyword, whatever
+         source it came from. GDELT's full-text search is loose and returns
+         off-topic stories for a query; without this they inherited the
+         category of whichever keyword happened to fetch them. */
+      var blob = (a.hl + " " + (a.desc || "")).toLowerCase();
+      var pool = a.cat
+        ? active.filter(function (w) { return w.cat === a.cat; })
+        : active;
+      var hit = pool.find(function (w) { return matchesTerm(w.term, blob); });
+      if (!hit && a.cat) hit = active.find(function (w) { return matchesTerm(w.term, blob); });
+      if (!hit) return;
+      var cat = hit.cat;
+
       var dom = a.src && a.src.indexOf(".") > -1 ? a.src : domainOf(a.url);
-      tagged.push({ id: hash(a.url), hl: a.hl.slice(0, 150), url: a.url,
+      tagged.push({ id: hash(canonUrl(a.url)), hl: a.hl.slice(0, 150), url: a.url,
                     src: a.src || dom, dt: a.dt, via: a.via, cat: cat, typ: classify(dom),
                     desc: (a.desc || "").slice(0, 400), img: a.img || "" });
     });
 
-    var map = {}, fresh = [];
-    tagged.forEach(function (a) { if (!map[a.id]) { map[a.id] = 1; fresh.push(a); } });
-    var known = {}; S.items.forEach(function (i) { known[i.id] = 1; });
-    fresh = fresh.filter(function (a) { return !known[a.id]; })
-      .sort(function (a, b) {
-        return (RANK[a.typ] - RANK[b.typ]) || String(b.dt).localeCompare(String(a.dt));
-      }).slice(0, 24);
+    /* Collapse duplicates by canonical URL and by headline. Where the same
+       story arrives twice, keep the better-ranked source. */
+    var byId = {}, byTitle = {}, fresh = [];
+    tagged.sort(function (a, b) { return RANK[a.typ] - RANK[b.typ]; });
+    tagged.forEach(function (a) {
+      var tk = titleKey(a.hl);
+      if (byId[a.id] || (tk && byTitle[tk])) return;
+      byId[a.id] = 1; if (tk) byTitle[tk] = 1;
+      fresh.push(a);
+    });
+
+    /* and against everything already in the feed */
+    var knownId = {}, knownTitle = {};
+    S.items.forEach(function (i) {
+      knownId[i.id] = 1;
+      var k = titleKey(i.hl); if (k) knownTitle[k] = 1;
+    });
+    fresh = fresh.filter(function (a) {
+      return !knownId[a.id] && !knownTitle[titleKey(a.hl)];
+    }).sort(function (a, b) {
+      return (RANK[a.typ] - RANK[b.typ]) || String(b.dt).localeCompare(String(a.dt));
+    }).slice(0, 24);
 
     if (!fresh.length) {
       S.scanning = false; S.lastScan = new Date().toISOString(); setStatus("");
@@ -804,11 +860,10 @@ function sweep(onlyCat) {
           var parsed = parseArray(out);
           batch.forEach(function (a, n) {
             var m = parsed.find(function (x) { return Number(x.n) === n + 1; }) || {};
-            var g = String(m.grd || "").toUpperCase();
             done.push(Object.assign({}, a, {
               sum: String(m.sum || "").slice(0, 480),
               pri: ["flash","priority","routine"].indexOf(m.pri) > -1 ? m.pri : "routine",
-              grd: GRADE_RE.test(g) ? g : GRADES[a.typ]
+              grd: clampGrade(m.grd, a.typ)
             }));
           });
         }).catch(function (e) {
