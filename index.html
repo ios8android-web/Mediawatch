@@ -365,7 +365,7 @@ var RECOMMENDED = [
   { term: "Indian Ocean", cat: "MARITIME" }
 ];
 
-var BUILD = "v17 · IST";
+var BUILD = "v19 · IST";
 
 var DEFAULT_RELAYS = [
   "https://corsproxy.io/?url=",
@@ -373,7 +373,8 @@ var DEFAULT_RELAYS = [
   "https://api.allorigins.win/raw?url=",
   "https://proxy.killcors.com/?url="
 ];
-var MAX_AGE_MS = 7 * 24 * 3600 * 1000;   /* nothing older than a week enters the feed */
+/* age cap follows the chosen search period, with a day of slack */
+function maxAgeMs() { return ((S.days || 4) + 1) * 24 * 3600 * 1000; }
 var FETCH_TIMEOUT = 8000;   /* nothing is allowed to stall the queue */
 var POOL_LIMIT = 5;         /* simultaneous requests */
 
@@ -578,7 +579,7 @@ function el(tag, attrs) {
 /* ---------------------------- state ------------------------------- */
 
 var S = {
-  tab: "feed", filter: "ALL", view: "cards", sort: "newest", match: "balanced",
+  tab: "feed", filter: "ALL", view: "cards", sort: "newest", match: "balanced", days: 4,
   watch: SEED.map(function (s) { return { id: hash(s.term), term: s.term, cat: s.cat, alert: s.alert, on: true }; }),
   feeds: DEFAULT_FEEDS.slice(),
   keys: { groq: "", gemini: "", openrouter: "" },
@@ -587,6 +588,7 @@ var S = {
   bestRelay: null,
   items: [], seen: [], lastScan: null, brief: "",
   engine: {}, feedState: {}, relayState: {}, feedAdd: "", tagging: "", lastSweepStats: null,
+  filterScroll: 0,
   briefSections: [], briefStatus: "",
   scanning: false, briefing: false, status: "", err: ""
 };
@@ -600,6 +602,7 @@ function load() {
       if (cfg.keys) Object.assign(S.keys, cfg.keys);
       if (cfg.chain && cfg.chain.length) S.chain = cfg.chain;
       if (cfg.match) S.match = cfg.match;
+      if (cfg.days) S.days = cfg.days;
       if (cfg.relays && cfg.relays.length) S.relays = cfg.relays;
       else if (cfg.proxy) S.relays = [cfg.proxy].concat(
         DEFAULT_RELAYS.filter(function (r) { return r !== cfg.proxy; }));
@@ -620,7 +623,7 @@ function load() {
 function saveCfg() {
   try {
     localStorage.setItem("mw:config", JSON.stringify(
-      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, relays: S.relays, match: S.match }));
+      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, relays: S.relays, match: S.match, days: S.days }));
   } catch (e) {}
 }
 function saveFeed() {
@@ -634,9 +637,9 @@ function saveFeed() {
 
 /* Every request is capped. A dead source is skipped, never allowed to
    block the queue — this is what stalled the first build. */
-function timedFetch(u) {
+function timedFetch(u, ms) {
   var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
-  var timer = setTimeout(function () { if (ctl) ctl.abort(); }, FETCH_TIMEOUT);
+  var timer = setTimeout(function () { if (ctl) ctl.abort(); }, ms || FETCH_TIMEOUT);
   var opts = ctl ? { signal: ctl.signal } : {};
   return fetch(u, opts).then(function (r) {
     clearTimeout(timer);
@@ -650,7 +653,7 @@ function timedFetch(u) {
 
 /* Direct first, then each relay in turn. Whichever relay answers is
    remembered and tried first from then on. */
-function getText(url) {
+function getText(url, ms) {
   var relays = S.relays.filter(Boolean);
   var order = relays.slice();
   if (S.bestRelay && order.indexOf(S.bestRelay) > 0) {
@@ -663,7 +666,7 @@ function getText(url) {
   function next() {
     if (i >= targets.length) return Promise.reject(new Error("unreachable"));
     var t = targets[i++];
-    return timedFetch(t.u).then(function (txt) {
+    return timedFetch(t.u, ms).then(function (txt) {
       if (t.r) S.bestRelay = t.r;
       return txt;
     }, next);
@@ -693,7 +696,7 @@ function pool(tasks, limit, onTick) {
 function gdelt(term) {
   var url = "https://api.gdeltproject.org/api/v2/doc/doc?query=" +
     encodeURIComponent(term + " sourcelang:english") +
-    "&mode=ArtList&maxrecords=20&timespan=4d&sort=datedesc&format=json";
+    "&mode=ArtList&maxrecords=20&timespan=" + (S.days || 4) + "d&sort=datedesc&format=json";
   return getText(url).then(function (t) {
     var data = JSON.parse(t);
     return (data.articles || []).map(function (a) {
@@ -748,41 +751,121 @@ function normaliseUrl(u) {
 function looksLikeFeed(txt) {
   return /<(rss|feed|rdf:RDF)[\s>]/i.test(txt.slice(0, 2000));
 }
+/* Feeds are often on a different host from the site (bbc.com -> feeds.bbci.co.uk),
+   so path guessing alone fails. Known outlets are looked up directly; anything
+   else falls back to Google News filtered to that domain, which always works. */
+var KNOWN_FEEDS = {
+  "bbc.com": "https://feeds.bbci.co.uk/news/world/rss.xml",
+  "bbc.co.uk": "https://feeds.bbci.co.uk/news/world/rss.xml",
+  "reuters.com": "https://news.google.com/rss/search?q=site:reuters.com&hl=en-IN&gl=IN&ceid=IN:en",
+  "apnews.com": "https://news.google.com/rss/search?q=site:apnews.com&hl=en-IN&gl=IN&ceid=IN:en",
+  "ndtv.com": "https://feeds.feedburner.com/ndtvnews-top-stories",
+  "thehindu.com": "https://www.thehindu.com/news/national/feeder/default.rss",
+  "indianexpress.com": "https://indianexpress.com/section/india/feed/",
+  "hindustantimes.com": "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml",
+  "timesofindia.indiatimes.com": "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+  "indiatimes.com": "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+  "aljazeera.com": "https://www.aljazeera.com/xml/rss/all.xml",
+  "theprint.in": "https://theprint.in/feed/",
+  "orfonline.org": "https://www.orfonline.org/feed",
+  "idrw.org": "https://idrw.org/feed/",
+  "livefistdefence.com": "https://www.livefistdefence.com/feed",
+  "breakingdefense.com": "https://breakingdefense.com/feed/",
+  "defensenews.com": "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml",
+  "janes.com": "https://news.google.com/rss/search?q=site:janes.com&hl=en-IN&gl=IN&ceid=IN:en",
+  "economictimes.indiatimes.com": "https://economictimes.indiatimes.com/rssfeedstopstories.cms",
+  "swarajyamag.com": "https://swarajyamag.com/feed",
+  "firstpost.com": "https://www.firstpost.com/rss/world.xml"
+};
+
+function googleNewsSite(host) {
+  return "https://news.google.com/rss/search?q=" + encodeURIComponent("site:" + host) +
+         "&hl=en-IN&gl=IN&ceid=IN:en";
+}
+
+/* Find every declared feed link, whatever the attribute order or quoting. */
+function declaredFeeds(txt, base) {
+  var out = [];
+  var tags = txt.match(/<link\b[^>]*>/gi) || [];
+  tags.forEach(function (tag) {
+    if (!/rss|atom/i.test(tag)) return;
+    if (!/alternate/i.test(tag)) return;
+    var href = (tag.match(/href\s*=\s*["']([^"']+)["']/i) ||
+                tag.match(/href\s*=\s*([^\s>]+)/i) || [])[1];
+    if (!href) return;
+    if (href.indexOf("//") === 0) href = "https:" + href;
+    else if (href.indexOf("http") !== 0) {
+      try { href = new URL(href, base).href; } catch (e) { return; }
+    }
+    if (out.indexOf(href) === -1) out.push(href);
+  });
+  return out;
+}
+
 function discoverFeed(input) {
   var base = normaliseUrl(input);
   if (!base) return Promise.reject(new Error("enter a web address"));
+  var host, root;
+  try { host = new URL(base).hostname.replace(/^www\./, ""); root = new URL(base).origin; }
+  catch (e) { return Promise.reject(new Error("that does not look like a web address")); }
 
-  return getText(base).then(function (txt) {
+  /* 1. a feed address pasted directly */
+  return getText(base, 15000).then(function (txt) {
     if (looksLikeFeed(txt)) return base;
+    return null;
+  }, function () { return null; })
 
-    /* page declares its feed */
-    var m = txt.match(/<link[^>]+rel=["']alternate["'][^>]*>/gi) || [];
-    for (var i = 0; i < m.length; i++) {
-      if (!/type=["'][^"']*(rss|atom)[^"']*["']/i.test(m[i])) continue;
-      var href = (m[i].match(/href=["']([^"']+)["']/i) || [])[1];
-      if (!href) continue;
-      if (href.indexOf("//") === 0) href = "https:" + href;
-      else if (href.indexOf("http") !== 0) {
-        try { href = new URL(href, base).href; } catch (e) { continue; }
+  /* 2. a feed we already know for this outlet */
+  .then(function (found) {
+    if (found) return found;
+    if (KNOWN_FEEDS[host]) return KNOWN_FEEDS[host];
+    return null;
+  })
+
+  /* 3. a feed the page declares */
+  .then(function (found) {
+    if (found) return found;
+    return getText(base, 15000).then(function (txt) {
+      var links = declaredFeeds(txt, base);
+      if (!links.length) return null;
+      var i = 0;
+      function verify() {
+        if (i >= links.length) return null;
+        var cand = links[i++];
+        return getText(cand).then(function (t) {
+          return looksLikeFeed(t) ? cand : verify();
+        }, verify);
       }
-      return href;
-    }
-    throw new Error("no feed declared");
-  }).catch(function () {
-    /* fall back to common feed paths */
-    var root;
-    try { root = new URL(base).origin; } catch (e) { throw new Error("not a valid address"); }
-    var paths = ["/feed", "/rss", "/feed/", "/rss.xml", "/feeds/rss.xml", "/index.xml"];
+      return verify();
+    }, function () { return null; });
+  })
+
+  /* 4. the usual paths */
+  .then(function (found) {
+    if (found) return found;
+    var paths = ["/feed", "/feed/", "/rss", "/rss.xml", "/rss/", "/index.xml",
+                 "/feeds/rss.xml", "/rss/index.xml", "/atom.xml", "/feed.xml", "/en/feed"];
     var i = 0;
     function tryNext() {
-      if (i >= paths.length) throw new Error("no feed found at that address");
-      var candidate = root + paths[i++];
-      return getText(candidate).then(function (t) {
-        if (looksLikeFeed(t)) return candidate;
-        return tryNext();
+      if (i >= paths.length) return null;
+      var cand = root + paths[i++];
+      return getText(cand).then(function (t) {
+        return looksLikeFeed(t) ? cand : tryNext();
       }, tryNext);
     }
     return tryNext();
+  })
+
+  /* 5. anything can be followed through Google News */
+  .then(function (found) {
+    if (found) return found;
+    var gn = googleNewsSite(host);
+    return getText(gn).then(function (t) {
+      if (looksLikeFeed(t)) return gn;
+      throw new Error("no feed found, and Google News has nothing indexed for " + host);
+    }, function () {
+      throw new Error("could not reach " + host + " — check the relay in SETUP");
+    });
   });
 }
 
@@ -818,7 +901,7 @@ function parseRss(xml, defaultSrc) {
 
 function googleNews(term) {
   var url = "https://news.google.com/rss/search?q=" +
-    encodeURIComponent(term + " when:4d") + "&hl=en-IN&gl=IN&ceid=IN:en";
+    encodeURIComponent(term + " when:" + (S.days || 4) + "d") + "&hl=en-IN&gl=IN&ceid=IN:en";
   return getText(url).then(function (t) { return parseRss(t, null); });
 }
 
@@ -924,7 +1007,7 @@ function sweep(onlyCat) {
          whatever the feed holds — which can be months old. Apply the same
          window to everything so stale posts don't arrive marked NEW. */
       var age = Date.now() - new Date(a.dt).getTime();
-      if (isFinite(age) && age > MAX_AGE_MS) { dropOld++; return; }
+      if (isFinite(age) && age > maxAgeMs()) { dropOld++; return; }
 
       tagged.push({ id: hash(canonUrl(a.url)), hl: a.hl.slice(0, 150), url: a.url,
                     src: a.src || dom, dt: a.dt, via: a.via, cat: cat, typ: classify(dom),
@@ -975,7 +1058,7 @@ function sweep(onlyCat) {
     /* 4. summarise in batches of eight */
     var batches = [], i;
     for (i = 0; i < fresh.length; i += 6) batches.push(fresh.slice(i, i + 6));
-    var done = [], rejected = 0;
+    var done = [], rejected = 0, shortOnes = [];
 
     var work = batches.reduce(function (acc, batch, bi) {
       return acc.then(function () {
@@ -989,9 +1072,14 @@ function sweep(onlyCat) {
         var prompt =
 "For each numbered item below, decide whether it genuinely concerns the topic in brackets, then write a summary for a defence staff officer.\n\n" +
 "Set \"rel\": false when the item only shares a word with the topic and is really about something else \u2014 domestic politics, sport, entertainment, business results, civil aviation incidents, mining or land disputes. Set \"rel\": true only if a staff officer watching that topic would want to see it.\n\n" +
-"Every summary must be 24-30 words. Cover what happened, who is involved, and why it matters.\n" +
-"Where text follows a double colon, that is the source's own description — draw on it.\n" +
-"Where only a headline is given, expand on what the headline states and its significance, but do NOT invent names, figures, dates or events that are not implied by it.\n\n" +
+"Write EXACTLY TWO SENTENCES totalling 25-35 words. A one-line restatement of the headline is NOT acceptable.\n" +
+"  Sentence 1 — what happened, from the headline and any text after a double colon.\n" +
+"  Sentence 2 — why it matters to an Indian defence staff officer: the capability, actor, region or trend it speaks to.\n\n" +
+"Sentence 2 is your assessment of significance, so it needs no facts beyond the source. Never invent names, figures, dates or events — but reasoning about what a development implies is expected.\n\n" +
+"Example of the required depth:\n" +
+"  Headline: US and Japan launch space domain awareness payload\n" +
+"  GOOD: Washington and Tokyo have orbited a joint payload for tracking objects in space. It signals deepening allied cooperation on space surveillance, a domain India is also building capability in.\n" +
+"  BAD: US and Japan launch space domain awareness payload.\n\n" +
 "Return ONLY a JSON array, no prose and no code fences, one object per item in the same order:\n" +
 '[{"n":1,"rel":true,"sum":"summary text","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
 'pri: "flash" only for a major breaking development, "priority" for significant, otherwise "routine".\n' +
@@ -1002,6 +1090,7 @@ function sweep(onlyCat) {
           batch.forEach(function (a, n) {
             var m = parsed.find(function (x) { return Number(x.n) === n + 1; }) || {};
             if (m.rel === false) { rejected++; return; }
+            if (tooShort(m.sum, a.hl)) shortOnes.push(a.id);
             done.push(Object.assign({}, a, {
               sum: String(m.sum || "").slice(0, 480),
               pri: ["flash","priority","routine"].indexOf(m.pri) > -1 ? m.pri : "routine",
@@ -1024,6 +1113,24 @@ function sweep(onlyCat) {
     }, Promise.resolve());
 
     return work.then(function () {
+      if (!shortOnes.length) return;
+      var redo = done.filter(function (x) { return shortOnes.indexOf(x.id) > -1; }).slice(0, 12);
+      if (!redo.length) return;
+      setStatus("Deepening " + redo.length + " short summar" + (redo.length === 1 ? "y" : "ies"));
+      var list = redo.map(function (a, n) {
+        return (n + 1) + ". [" + a.src + "] " + a.hl + (a.desc ? " :: " + a.desc : "");
+      }).join("\n");
+      var p =
+"These summaries came back too short. Rewrite each as EXACTLY TWO SENTENCES totalling 25-35 words.\n\n" +
+"Sentence 1: what happened. Sentence 2: why it matters to an Indian defence staff officer \u2014 the capability, actor, region or trend involved. Sentence 2 is your assessment, so it needs no facts beyond the source, but never invent names, figures or events.\n\n" +
+"Do not simply repeat the headline. Return ONLY a JSON array: [{\"n\":1,\"sum\":\"...\"}]\n\nITEMS:\n" + list;
+      return runChain(p).then(function (out) {
+        parseArray(out).forEach(function (m) {
+          var a = redo[Number(m.n) - 1];
+          if (a && m.sum && wordCount(m.sum) > wordCount(a.sum)) a.sum = String(m.sum).slice(0, 480);
+        });
+      }, function () {});
+    }).then(function () {
       if (S.lastSweepStats) S.lastSweepStats.offTopic = rejected;
       S.items = done.concat(S.items).slice(0, 150);
       S.lastScan = new Date().toISOString();
@@ -1038,6 +1145,18 @@ function sweep(onlyCat) {
 
 /* Summarise items already in the feed that never got a summary — used when
    the engine was missing or rate limited during the sweep. No re-fetching. */
+/* The model sometimes ignores the length instruction and echoes the headline.
+   Detect that rather than trusting the prompt. */
+function wordCount(s) { return String(s || "").trim().split(/\s+/).filter(Boolean).length; }
+function tooShort(sum, hl) {
+  if (!sum) return false;
+  if (wordCount(sum) < 18) return true;
+  /* a summary that is just the headline with the punctuation changed */
+  var a = String(sum).toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+  var b = String(hl || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+  return b.length > 20 && a.indexOf(b.slice(0, Math.min(b.length, 45))) > -1 && wordCount(sum) < 24;
+}
+
 function summariseMissing() {
   var pending = S.items.filter(function (i) { return !i.sum; });
   if (!pending.length) { S.err = "Everything in the feed is already summarised."; render(); return; }
@@ -1060,9 +1179,14 @@ function summariseMissing() {
       var prompt =
 "For each numbered item below, decide whether it genuinely concerns the topic in brackets, then write a summary for a defence staff officer.\n\n" +
 "Set \"rel\": false when the item only shares a word with the topic and is really about something else \u2014 domestic politics, sport, entertainment, business results, civil aviation incidents, mining or land disputes. Set \"rel\": true only if a staff officer watching that topic would want to see it.\n\n" +
-"Every summary must be 24-30 words. Cover what happened, who is involved, and why it matters.\n" +
-"Where text follows a double colon, that is the source's own description — draw on it.\n" +
-"Where only a headline is given, expand on what the headline states and its significance, but do NOT invent names, figures, dates or events that are not implied by it.\n\n" +
+"Write EXACTLY TWO SENTENCES totalling 25-35 words. A one-line restatement of the headline is NOT acceptable.\n" +
+"  Sentence 1 — what happened, from the headline and any text after a double colon.\n" +
+"  Sentence 2 — why it matters to an Indian defence staff officer: the capability, actor, region or trend it speaks to.\n\n" +
+"Sentence 2 is your assessment of significance, so it needs no facts beyond the source. Never invent names, figures, dates or events — but reasoning about what a development implies is expected.\n\n" +
+"Example of the required depth:\n" +
+"  Headline: US and Japan launch space domain awareness payload\n" +
+"  GOOD: Washington and Tokyo have orbited a joint payload for tracking objects in space. It signals deepening allied cooperation on space surveillance, a domain India is also building capability in.\n" +
+"  BAD: US and Japan launch space domain awareness payload.\n\n" +
 "Return ONLY a JSON array, no prose and no code fences, one object per item in the same order:\n" +
 '[{"n":1,"rel":true,"sum":"summary text","pri":"flash|priority|routine","grd":"B2"}]\n\n' +
 'pri: "flash" only for a major breaking development, "priority" for significant, otherwise "routine".\n' +
@@ -1377,9 +1501,24 @@ function renderFeed(app) {
     var f = el("div", { class: "filters" });
     cats.forEach(function (c) {
       f.appendChild(el("button", { class: "chip", "data-on": S.filter === c ? "1" : "0", text: c,
-        on: { click: function () { S.filter = c; render(); } } }));
+        on: { click: function () { S.filter = c; S.filterScroll = f.scrollLeft; render(); } } }));
     });
+    /* The row is rebuilt on every render, which used to snap it back to the
+       start — so a category you had scrolled to disappeared the moment you
+       tapped it. Restore the position, then make sure the active chip is
+       actually on screen. */
+    f.addEventListener("scroll", function () { S.filterScroll = f.scrollLeft; });
     app.appendChild(f);
+    requestAnimationFrame(function () {
+      f.scrollLeft = S.filterScroll || 0;
+      var on = f.querySelector('.chip[data-on="1"]');
+      if (!on) return;
+      var left = on.offsetLeft, right = left + on.offsetWidth;
+      if (left < f.scrollLeft + 8 || right > f.scrollLeft + f.clientWidth - 8) {
+        f.scrollLeft = Math.max(0, left - 16);
+        S.filterScroll = f.scrollLeft;
+      }
+    });
   }
   var shown = S.filter === "ALL" ? S.items : S.items.filter(function (i) { return i.cat === S.filter; });
   if (!shown.length) {
@@ -1570,6 +1709,19 @@ function renderSetup(app) {
     "How closely a headline must match a keyword to enter the feed. Broad keeps anything sharing a distinctive word; Strict wants two. If a category has gone quiet, widen this before rewriting your keywords." }));
   app.appendChild(msec);
 
+  /* search period */
+  var psec = el("div", { class: "sec" },
+    el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Search period" })));
+  var pgrp = el("div", { class: "grp" });
+  [[1, "24h"], [4, "4 days"], [7, "1 week"], [14, "2 weeks"]].forEach(function (p) {
+    pgrp.appendChild(el("button", { class: "seg", "data-on": (S.days || 4) === p[0] ? "1" : "0",
+      text: p[1], on: { click: function () { S.days = p[0]; saveCfg(); render(); } } }));
+  });
+  psec.appendChild(el("div", { class: "viewbar", style: "padding:0" }, pgrp));
+  psec.appendChild(el("div", { class: "hint", text:
+    "How far back each sweep looks. Applies to GDELT, Google News and your outlet feeds alike, and sets the age limit for what may enter the feed. A longer period returns more but takes longer and repeats more of what you have already seen." }));
+  app.appendChild(psec);
+
   /* engines */
   var sec = el("div", { class: "sec" },
     el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Summary engines" })));
@@ -1642,14 +1794,18 @@ function renderSetup(app) {
   function addFeed() {
     var raw = fIn.value.trim();
     if (!raw) return;
-    S.feedAdd = "Looking for a feed at " + raw + "…";
+    S.feedAdd = "Looking for a feed at " + raw + "… this can take up to a minute.";
     render();
     discoverFeed(raw).then(function (feedUrl) {
       if (S.feeds.some(function (f) { return f.url === feedUrl; })) {
         S.feedAdd = "Already added: " + feedUrl;
       } else {
-        S.feeds.push({ id: hash(feedUrl), name: domainOf(feedUrl), url: feedUrl, on: true });
-        S.feedAdd = "Added " + feedUrl;
+        var viaGN = feedUrl.indexOf("news.google.com") > -1;
+        var label = viaGN ? (domainOf(normaliseUrl(raw)) + " (via Google News)") : domainOf(feedUrl);
+        S.feeds.push({ id: hash(feedUrl), name: label, url: feedUrl, on: true });
+        S.feedAdd = viaGN
+          ? "Added " + domainOf(normaliseUrl(raw)) + " through Google News \u2014 that site publishes no direct feed."
+          : "Added " + feedUrl;
         saveCfg();
       }
       render();

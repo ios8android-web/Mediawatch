@@ -2,7 +2,7 @@
    Caches the app shell so it opens instantly and works with no signal.
    Never caches news or engine requests — those must always be live. */
 
-var CACHE = "sentinel-v17";
+var CACHE = "sentinel-v19";
 var SHELL = ["./", "./index.html", "./manifest.json",
              "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 
