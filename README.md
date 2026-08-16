@@ -1,4 +1,4 @@
-# Media Watch
+# Sentinel AI
 
 Keyword news sweep with AI summaries and in-app alerts. One HTML file, no build step,
 no installation on any computer. Everything below is done from the iPhone.
@@ -62,10 +62,14 @@ No rebuild, no resubmission, no review.
 
 ## Reading the feed
 
-FEED has two layouts. **Cards** is the default — full summaries, one item per screen.
-**Timeline** is a chronological ticker across every category at once, grouped by day
-with a time-of-day stamp on each line, so you can see the shape of a busy day rather
-than reading it as a filtered stack. Both respect the category chips the same way.
+FEED has two layouts. **Cards** is the default — full summaries, one item per screen,
+with a coloured left edge on anything flagged (solid amber for FLASH, muted amber for
+PRIORITY) and source/category/priority shown as small tags rather than a line of text.
+A **Newest / Urgency** control sorts Cards either by time or by priority first; switch
+to **Timeline** for a chronological ticker across every category at once, grouped by
+day with a time-of-day stamp on each line — Timeline always stays strictly
+chronological, so the sort control is hidden there. Both layouts respect the category
+chips the same way.
 
 Each item carries a two-character grade — source reliability A–F, then information
 credibility 1–6. **These are the model's guess, not an assessment.** Treat them as a

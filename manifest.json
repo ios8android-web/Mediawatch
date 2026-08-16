@@ -1,6 +1,6 @@
 {
-  "name": "Sentinel",
-  "short_name": "Sentinel",
+  "name": "Sentinel AI",
+  "short_name": "Sentinel AI",
   "description": "Keyword news sweep with summaries and alerts",
   "start_url": "./index.html",
   "scope": "./",
@@ -9,8 +9,23 @@
   "background_color": "#F6F7FB",
   "theme_color": "#F6F7FB",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }

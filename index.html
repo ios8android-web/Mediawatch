@@ -6,12 +6,12 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Sentinel">
+<meta name="apple-mobile-web-app-title" content="Sentinel AI">
 <meta name="theme-color" content="#F6F7FB">
 <meta name="color-scheme" content="light">
 <meta name="supported-color-schemes" content="light">
 <meta name="robots" content="noindex, nofollow">
-<title>Sentinel</title>
+<title>Sentinel AI</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
@@ -137,6 +137,9 @@ h1::before{content:"";display:inline-block;width:8px;height:8px;background:var(-
   color:var(--accent);background:var(--accent-soft);padding:10px 12px;border-radius:var(--r-sm);
   text-align:center;width:100%}
 .expand[disabled]{color:var(--mute);background:var(--panel)}
+.actions{display:flex;gap:8px;margin-top:12px}
+.act{flex:1;padding:9px 10px;border-radius:var(--r-sm);background:var(--panel);color:var(--mute);font-size:12px;font-weight:600;text-align:center}
+.act.star[data-on="1"]{background:var(--prio-bg);color:var(--prio-fg)}
 
 /* ---- timeline ---- */
 .tl{padding:6px 16px 4px}
@@ -222,7 +225,7 @@ input::placeholder{color:var(--mute)}
 "use strict";
 
 /* =================================================================
-   SENTINEL  —  single-file build
+   SENTINEL AI  —  single-file build
    Retrieval : GDELT DOC 2.0 + Google News RSS + direct outlet RSS
    Summaries : free LLM tier, primary -> secondary automatic failover
    Storage   : localStorage, on this device only
@@ -278,6 +281,22 @@ var PROVIDERS = {
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
         body: JSON.stringify({
           model: "meta-llama/llama-3.3-70b-instruct:free", temperature: 0.2, max_tokens: 2000,
+          messages: [{ role: "user", content: prompt }]
+        })
+      }).then(readOpenAI);
+    }
+  },
+  openai: {
+    label: "OpenAI",
+    note: "GPT-4o mini. Needs its own API credit from platform.openai.com \u2014 a ChatGPT Plus subscription does NOT cover this.",
+    hint: "sk-proj\u2026  from platform.openai.com",
+    needsKey: true,
+    call: function (prompt, key) {
+      return fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
+        body: JSON.stringify({
+          model: "gpt-4o-mini", temperature: 0.2, max_tokens: 2000,
           messages: [{ role: "user", content: prompt }]
         })
       }).then(readOpenAI);
@@ -365,7 +384,7 @@ var RECOMMENDED = [
   { term: "Indian Ocean", cat: "MARITIME" }
 ];
 
-var BUILD = "v19 · IST";
+var BUILD = "v21 · IST";
 
 var DEFAULT_RELAYS = [
   "https://corsproxy.io/?url=",
@@ -579,11 +598,11 @@ function el(tag, attrs) {
 /* ---------------------------- state ------------------------------- */
 
 var S = {
-  tab: "feed", filter: "ALL", view: "cards", sort: "newest", match: "balanced", days: 4,
+  tab: "feed", filter: "ALL", view: "cards", sort: "newest", match: "balanced", days: 4, keepRead: false,
   watch: SEED.map(function (s) { return { id: hash(s.term), term: s.term, cat: s.cat, alert: s.alert, on: true }; }),
   feeds: DEFAULT_FEEDS.slice(),
-  keys: { groq: "", gemini: "", openrouter: "" },
-  chain: ["groq", "gemini", "openrouter"],
+  keys: { groq: "", gemini: "", openrouter: "", openai: "" },
+  chain: ["groq", "gemini", "openrouter", "openai"],
   relays: DEFAULT_RELAYS.slice(),
   bestRelay: null,
   items: [], seen: [], lastScan: null, brief: "",
@@ -603,6 +622,7 @@ function load() {
       if (cfg.chain && cfg.chain.length) S.chain = cfg.chain;
       if (cfg.match) S.match = cfg.match;
       if (cfg.days) S.days = cfg.days;
+      if (typeof cfg.keepRead === "boolean") S.keepRead = cfg.keepRead;
       if (cfg.relays && cfg.relays.length) S.relays = cfg.relays;
       else if (cfg.proxy) S.relays = [cfg.proxy].concat(
         DEFAULT_RELAYS.filter(function (r) { return r !== cfg.proxy; }));
@@ -623,7 +643,7 @@ function load() {
 function saveCfg() {
   try {
     localStorage.setItem("mw:config", JSON.stringify(
-      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, relays: S.relays, match: S.match, days: S.days }));
+      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, relays: S.relays, match: S.match, days: S.days, keepRead: S.keepRead }));
   } catch (e) {}
 }
 function saveFeed() {
@@ -1132,7 +1152,10 @@ function sweep(onlyCat) {
       }, function () {});
     }).then(function () {
       if (S.lastSweepStats) S.lastSweepStats.offTopic = rejected;
-      S.items = done.concat(S.items).slice(0, 150);
+      var merged = done.concat(S.items);
+      var keep = merged.filter(function (i) { return i.star; });
+      var rest = merged.filter(function (i) { return !i.star; }).slice(0, 150 - keep.length);
+      S.items = keep.concat(rest);
       S.lastScan = new Date().toISOString();
       S.scanning = false; setStatus(""); saveFeed(); render();
     });
@@ -1155,6 +1178,20 @@ function tooShort(sum, hl) {
   var a = String(sum).toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
   var b = String(hl || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
   return b.length > 20 && a.indexOf(b.slice(0, Math.min(b.length, 45))) > -1 && wordCount(sum) < 24;
+}
+
+/* Marking read clears the item out of the way. Saved items are kept and
+   simply lose their unread state, so a bookmark is never lost by accident. */
+function markRead(id) {
+  var it = S.items.find(function (x) { return x.id === id; });
+  if (!it) return;
+  if (it.star || S.keepRead) {
+    if (S.seen.indexOf(id) === -1) S.seen.push(id);
+  } else {
+    S.items = S.items.filter(function (x) { return x.id !== id; });
+    S.seen = S.seen.filter(function (x) { return x !== id; });
+  }
+  saveFeed(); render();
 }
 
 function summariseMissing() {
@@ -1409,7 +1446,13 @@ function itemNode(it, isNew) {
       thin ? el("span", { style: "align-self:center;color:var(--mute)", text: "headline only" }) : null),
     thin ? el("button", { class: "expand", disabled: it.expanding,
         text: it.expanding ? "Fetching full article…" : "Expand from source ↓",
-        on: { click: function () { expandItem(it.id); } } }) : null);
+        on: { click: function () { expandItem(it.id); } } }) : null,
+    el("div", { class: "actions" },
+      el("button", { class: "act star", "data-on": it.star ? "1" : "0",
+        text: it.star ? "★ Saved" : "☆ Save",
+        on: { click: function () { it.star = !it.star; saveFeed(); render(); } } }),
+      el("button", { class: "act", text: "✓ Mark read",
+        on: { click: function () { markRead(it.id); } } })));
 }
 
 function render() {
@@ -1427,7 +1470,7 @@ function render() {
   });
   app.appendChild(el("header", { class: "head" },
     el("div", { class: "head-in" },
-      el("h1", { text: "Sentinel" }),
+      el("h1", { text: "Sentinel AI" }),
       el("span", { class: "dtg", text: dtg(new Date()) })),
     tabs));
 
@@ -1497,6 +1540,7 @@ function renderFeed(app) {
 
   if (S.items.length) {
     var cats = ["ALL"];
+    if (S.items.some(function (i) { return i.star; })) cats.push("\u2605 SAVED");
     S.items.forEach(function (i) { if (cats.indexOf(i.cat) === -1) cats.push(i.cat); });
     var f = el("div", { class: "filters" });
     cats.forEach(function (c) {
@@ -1520,7 +1564,9 @@ function renderFeed(app) {
       }
     });
   }
-  var shown = S.filter === "ALL" ? S.items : S.items.filter(function (i) { return i.cat === S.filter; });
+  var shown = S.filter === "ALL" ? S.items
+    : S.filter === "\u2605 SAVED" ? S.items.filter(function (i) { return i.star; })
+    : S.items.filter(function (i) { return i.cat === S.filter; });
   if (!shown.length) {
     app.appendChild(el("div", { class: "empty" },
       el("b", { text: "Feed is empty" }),
@@ -1709,6 +1755,18 @@ function renderSetup(app) {
     "How closely a headline must match a keyword to enter the feed. Broad keeps anything sharing a distinctive word; Strict wants two. If a category has gone quiet, widen this before rewriting your keywords." }));
   app.appendChild(msec);
 
+  /* reading behaviour */
+  var rdsec = el("div", { class: "sec" },
+    el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Reading" })));
+  rdsec.appendChild(el("div", { class: "row" },
+    el("button", { class: "box", "data-on": S.keepRead ? "1" : "0",
+      "aria-label": "Keep items after marking read",
+      on: { click: function () { S.keepRead = !S.keepRead; saveCfg(); render(); } } }),
+    el("div", { class: "term" }, "Keep items after marking read")));
+  rdsec.appendChild(el("div", { class: "hint", text:
+    "Off by default: Mark read removes the item from the feed, so what remains is what you have not dealt with. Saved items are always kept regardless, and marking one read only clears its unread marker." }));
+  app.appendChild(rdsec);
+
   /* search period */
   var psec = el("div", { class: "sec" },
     el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Search period" })));
@@ -1860,7 +1918,9 @@ function renderSetup(app) {
       "Everything lives in this browser on this device. Nothing is sent anywhere except to the news sources and the engine you chose." }),
     el("div", { class: "add" },
       el("button", { class: "addbtn", text: "Clear feed", on: { click: function () {
-        S.items = []; S.seen = []; S.brief = ""; S.lastScan = null; saveFeed(); render();
+        var kept = S.items.filter(function (i) { return i.star; });
+        S.items = kept; S.seen = []; S.brief = ""; S.briefSections = [];
+        S.lastScan = null; saveFeed(); render();
       } } }),
       el("button", { class: "addbtn", text: "Reset all", on: { click: function () {
         if (!confirm("Erase keywords, feeds, keys and stored articles?")) return;
