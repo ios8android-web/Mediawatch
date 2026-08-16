@@ -96,6 +96,22 @@ h1::before{content:"";display:inline-block;width:8px;height:8px;background:var(-
 .vdiv{display:none}
 
 /* ---- filters ---- */
+.vol{margin:10px 16px 0;padding:12px 14px;background:var(--surface);border-radius:var(--r);
+  box-shadow:var(--shadow-sm)}
+.vol.compact{margin:8px 0 0;padding:0;background:none;box-shadow:none}
+.vol-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px;
+  font-size:11px;font-weight:600;color:var(--mute)}
+.vol-head b{color:var(--accent);font-weight:700}
+.vol-bars{display:flex;align-items:flex-end;gap:5px;height:52px}
+.vol.compact .vol-bars{height:26px;gap:3px}
+.vol-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%}
+.vol-track{flex:1;width:100%;display:flex;align-items:flex-end;position:relative}
+.vol-bar{width:100%;background:var(--accent);border-radius:4px 4px 2px 2px;min-height:2px}
+.vol-bar[data-zero="1"]{background:var(--line)}
+.vol.compact .vol-bar{border-radius:3px}
+.vol-n{position:absolute;top:-13px;left:0;right:0;text-align:center;font-size:9px;
+  font-weight:700;color:var(--mute)}
+.vol-lbl{font-size:9px;color:var(--mute);font-weight:600}
 .tally{display:flex;align-items:center;gap:10px;margin:10px 16px 0;padding:10px 13px;background:var(--panel);border-radius:var(--r-sm);font-size:11px;color:var(--mute);line-height:1.4}
 .tally span{flex:1}
 .filters{display:flex;gap:7px;padding:14px 16px 4px;overflow-x:auto;
@@ -384,7 +400,7 @@ var RECOMMENDED = [
   { term: "Indian Ocean", cat: "MARITIME" }
 ];
 
-var BUILD = "v22 · IST";
+var BUILD = "v23 · IST";
 
 var DEFAULT_RELAYS = [
   "https://corsproxy.io/?url=",
@@ -607,7 +623,7 @@ var S = {
   bestRelay: null,
   items: [], seen: [], lastScan: null, brief: "",
   engine: {}, feedState: {}, relayState: {}, feedAdd: "", tagging: "", lastSweepStats: null,
-  filterScroll: 0,
+  filterScroll: 0, showChart: true,
   briefSections: [], briefStatus: "",
   scanning: false, briefing: false, status: "", err: ""
 };
@@ -1397,6 +1413,64 @@ function expandItem(id) {
   });
 }
 
+/* ---------------------------- volume chart ------------------------ */
+
+/* Items per IST day for a category (or all), oldest first. */
+function dayCounts(cat, days) {
+  days = days || 7;
+  var buckets = [], keys = [], i;
+  var now = toIST(new Date());
+  for (i = days - 1; i >= 0; i--) {
+    var d = new Date(now.getTime() - i * 86400000);
+    keys.push(d.getUTCFullYear() + "-" + p2(d.getUTCMonth() + 1) + "-" + p2(d.getUTCDate()));
+    buckets.push(0);
+  }
+  S.items.forEach(function (it) {
+    if (cat && cat !== "ALL" && it.cat !== cat) return;
+    var t = new Date(it.dt);
+    if (isNaN(t)) return;
+    var k = toIST(t);
+    var key = k.getUTCFullYear() + "-" + p2(k.getUTCMonth() + 1) + "-" + p2(k.getUTCDate());
+    var idx = keys.indexOf(key);
+    if (idx > -1) buckets[idx]++;
+  });
+  return { counts: buckets, keys: keys };
+}
+
+/* Compact bar chart. Built from divs rather than SVG so it inherits the
+   theme and needs no namespace handling. */
+function volumeChart(cat, opts) {
+  opts = opts || {};
+  var days = opts.days || 7;
+  var data = dayCounts(cat, days);
+  var counts = data.counts;
+  var max = Math.max.apply(null, counts.concat([1]));
+  var total = counts.reduce(function (a, b) { return a + b; }, 0);
+
+  var wrap = el("div", { class: "vol" + (opts.compact ? " compact" : "") });
+  if (!opts.compact) {
+    wrap.appendChild(el("div", { class: "vol-head" },
+      el("span", { text: (cat && cat !== "ALL" ? cat : "All categories") + " \u00b7 last " + days + " days" }),
+      el("b", { text: total + (total === 1 ? " item" : " items") })));
+  }
+  var bars = el("div", { class: "vol-bars" });
+  counts.forEach(function (n, i) {
+    var day = new Date(data.keys[i] + "T00:00:00Z");
+    var pct = Math.round((n / max) * 100);
+    var col = el("div", { class: "vol-col", title: n + " on " + data.keys[i] },
+      el("div", { class: "vol-track" },
+        el("div", { class: "vol-bar", "data-zero": n === 0 ? "1" : "0",
+                    style: "height:" + (n === 0 ? 2 : Math.max(6, pct)) + "%" })),
+      opts.compact ? null
+        : el("span", { class: "vol-lbl", text: String(day.getUTCDate()) }));
+    if (!opts.compact && n > 0) col.querySelector(".vol-track").appendChild(
+      el("span", { class: "vol-n", text: String(n) }));
+    bars.appendChild(col);
+  });
+  wrap.appendChild(bars);
+  return wrap;
+}
+
 /* ---------------------------- render ------------------------------ */
 
 function unseenItems() {
@@ -1564,6 +1638,10 @@ function renderFeed(app) {
       }
     });
   }
+  if (S.items.length && S.showChart !== false && S.filter !== "\u2605 SAVED") {
+    app.appendChild(volumeChart(S.filter, { days: Math.min(14, Math.max(7, S.days || 7)) }));
+  }
+
   var shown = S.filter === "ALL" ? S.items
     : S.filter === "\u2605 SAVED" ? S.items.filter(function (i) { return i.star; })
     : S.items.filter(function (i) { return i.cat === S.filter; });
@@ -1638,6 +1716,9 @@ function renderWatch(app) {
         el("span", { class: "sec-t", text: cat }),
         el("button", { class: "link", text: "Scan " + cat, disabled: S.scanning,
           on: { click: function () { if (!S.scanning) sweep(cat); } } })));
+    if (S.items.some(function (i) { return i.cat === cat; })) {
+      sec.appendChild(volumeChart(cat, { days: 7, compact: true }));
+    }
     S.watch.filter(function (w) { return w.cat === cat; }).forEach(function (w) {
       sec.appendChild(el("div", { class: "row" },
         el("button", { class: "box", "data-on": w.on ? "1" : "0", "aria-label": w.on ? "Turn off" : "Turn on",
