@@ -384,7 +384,7 @@ var RECOMMENDED = [
   { term: "Indian Ocean", cat: "MARITIME" }
 ];
 
-var BUILD = "v21 · IST";
+var BUILD = "v22 · IST";
 
 var DEFAULT_RELAYS = [
   "https://corsproxy.io/?url=",
@@ -963,7 +963,7 @@ function setStatus(t) {
 
 function sweep(onlyCat) {
   var active = S.watch.filter(function (w) { return w.on && (!onlyCat || w.cat === onlyCat); });
-  if (!active.length) { S.err = "No active keywords. Add one in WATCH before sweeping."; render(); return; }
+  if (!active.length) { S.err = "No active keywords. Add one in WATCH before scanning."; render(); return; }
 
   S.err = ""; S.scanning = true; S.tab = "feed"; S.engine = {}; S.feedState = {};
   render();
@@ -1071,7 +1071,7 @@ function sweep(onlyCat) {
             ? "Collected " + raw.length + " headlines but kept none — " + dropIrrelevant +
               " did not match your keywords and " + dropOld + " were older than a week. " +
               "If that seems wrong, set Keyword matching to Broad in SETUP."
-            : "Sweep finished but found nothing. Check SETUP — Test relays.");
+            : "Scan finished but found nothing. Check SETUP — Test relays.");
       saveFeed(); render(); return;
     }
 
@@ -1160,7 +1160,7 @@ function sweep(onlyCat) {
       S.scanning = false; setStatus(""); saveFeed(); render();
     });
   }).catch(function (e) {
-    S.scanning = false; setStatus(""); S.err = "Sweep failed — " + e.message; render();
+    S.scanning = false; setStatus(""); S.err = "Scan failed — " + e.message; render();
   });
 }
 
@@ -1251,7 +1251,7 @@ function summariseMissing() {
 
 function makeBrief() {
   var pool = S.items.filter(function (i) { return i.sum; });
-  if (!pool.length) { S.err = "Nothing summarised to brief on. Run a sweep first."; render(); return; }
+  if (!pool.length) { S.err = "Nothing summarised to brief on. Run a scan first."; render(); return; }
   S.err = ""; S.briefing = true; S.tab = "brief"; S.brief = ""; S.briefSections = []; render();
 
   /* group by category, densest first */
@@ -1434,7 +1434,7 @@ function itemNode(it, isNew) {
           return im;
         })() : null)),
     el("p", { class: "sum", "data-raw": it.sum ? "0" : "1",
-      text: it.sum || "Not summarised — no engine answered on the last sweep." }),
+      text: it.sum || "Not summarised — no engine answered on the last scan." }),
     el("div", { class: "meta" },
       el("span", { class: "tag", text: it.src }),
       el("span", { class: "tag cat", text: it.cat }),
@@ -1486,11 +1486,11 @@ function render() {
 
   /* scan bar */
   app.appendChild(el("div", { class: "scan" },
-    el("button", { class: "sweep", disabled: S.scanning, text: S.scanning ? "Sweeping" : "Sweep now",
+    el("button", { class: "sweep", disabled: S.scanning, text: S.scanning ? "Scanning" : "Scan now",
       on: { click: function () { if (!S.scanning) sweep(); } } }),
     el("span", { class: "scan-msg", id: "scanmsg",
       text: S.scanning ? S.status
-        : S.lastScan ? "Last sweep " + dtg(new Date(S.lastScan)) : "No sweep run yet" })));
+        : S.lastScan ? "Last scan " + dtg(new Date(S.lastScan)) : "No scan run yet" })));
   if (S.scanning) app.appendChild(el("div", { class: "prog" }, el("i")));
   if (S.err) app.appendChild(el("div", { class: "err", text: S.err }));
 
@@ -1531,7 +1531,7 @@ function renderFeed(app) {
   var st = S.lastSweepStats;
   if (st && !S.scanning) {
     app.appendChild(el("div", { class: "tally" },
-      el("span", { text: "Last sweep: " + st.collected + " collected · " + st.kept + " kept · " +
+      el("span", { text: "Last scan: " + st.collected + " collected · " + st.kept + " kept · " +
         st.irrelevant + " off-keyword · " + st.old + " too old" +
         (st.offTopic ? " · " + st.offTopic + " rejected on review" : "") }),
       el("button", { class: "link", text: "Matching: " + (S.match || "balanced"),
@@ -1570,7 +1570,7 @@ function renderFeed(app) {
   if (!shown.length) {
     app.appendChild(el("div", { class: "empty" },
       el("b", { text: "Feed is empty" }),
-      "Sweep now pulls headlines from GDELT, Google News and your outlet feeds, then summarises them on whichever engine answers first. Add a key in SETUP before the first sweep."));
+      "Scan now pulls headlines from GDELT, Google News and your outlet feeds, then summarises them on whichever engine answers first. Add a key in SETUP before the first scan."));
     return;
   }
 
@@ -1636,7 +1636,7 @@ function renderWatch(app) {
     var sec = el("div", { class: "sec" },
       el("div", { class: "sec-h" },
         el("span", { class: "sec-t", text: cat }),
-        el("button", { class: "link", text: "Sweep " + cat, disabled: S.scanning,
+        el("button", { class: "link", text: "Scan " + cat, disabled: S.scanning,
           on: { click: function () { if (!S.scanning) sweep(cat); } } })));
     S.watch.filter(function (w) { return w.cat === cat; }).forEach(function (w) {
       sec.appendChild(el("div", { class: "row" },
@@ -1777,7 +1777,7 @@ function renderSetup(app) {
   });
   psec.appendChild(el("div", { class: "viewbar", style: "padding:0" }, pgrp));
   psec.appendChild(el("div", { class: "hint", text:
-    "How far back each sweep looks. Applies to GDELT, Google News and your outlet feeds alike, and sets the age limit for what may enter the feed. A longer period returns more but takes longer and repeats more of what you have already seen." }));
+    "How far back each scan looks. Applies to GDELT, Google News and your outlet feeds alike, and sets the age limit for what may enter the feed. A longer period returns more but takes longer and repeats more of what you have already seen." }));
   app.appendChild(psec);
 
   /* engines */
@@ -1878,7 +1878,7 @@ function renderSetup(app) {
     el("button", { class: "addbtn", text: "Add", on: { click: addFeed } })));
   if (S.feedAdd) fsec.appendChild(el("div", { class: "hint", text: S.feedAdd }));
   fsec.appendChild(el("div", { class: "hint", text:
-    "Feed addresses change without warning. After each sweep every line shows how many items it returned, so anything reading unreachable can be replaced or switched off." }));
+    "Feed addresses change without warning. After each scan every line shows how many items it returned, so anything reading unreachable can be replaced or switched off." }));
   app.appendChild(fsec);
 
   /* relays */
@@ -1908,7 +1908,7 @@ function renderSetup(app) {
   rsec.appendChild(el("div", { class: "add" }, nrIn,
     el("button", { class: "addbtn", text: "Add", on: { click: addRelay } })));
   rsec.appendChild(el("div", { class: "hint", text:
-    "News sites refuse direct browser requests, so feeds go through a relay. Each is tried in turn until one answers, and the one that works is remembered. Every request times out after 8 seconds, so a dead relay costs seconds rather than stalling the sweep." }));
+    "News sites refuse direct browser requests, so feeds go through a relay. Each is tried in turn until one answers, and the one that works is remembered. Every request times out after 8 seconds, so a dead relay costs seconds rather than stalling the scan." }));
   app.appendChild(rsec);
 
   /* reset */

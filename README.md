@@ -1,6 +1,6 @@
 # Sentinel AI
 
-Keyword news sweep with AI summaries and in-app alerts. One HTML file, no build step,
+Keyword news scan with AI summaries and in-app alerts. One HTML file, no build step,
 no installation on any computer. Everything below is done from the iPhone.
 
 ---
@@ -44,11 +44,11 @@ Safari → **aistudio.google.com** → **Get API key** → copy the `AIza…` st
 4. **SETUP** → paste your Groq key. Paste the Gemini key too if you made one.
 5. **WATCH** → replace the six placeholder keywords with what you actually track.
    Tap **ALERT** on the ones that should raise the top strip.
-6. **FEED** → **Sweep now**
+6. **FEED** → **Scan now**
 
-First sweep takes roughly 20–40 seconds. Sources are fetched in parallel and anything
+First scan takes roughly 20–40 seconds. Sources are fetched in parallel and anything
 that does not answer within 8 seconds is skipped, so a dead feed costs seconds rather
-than stalling the whole sweep.
+than stalling the whole scan.
 GDELT and Google News for each keyword, then summarises in batches of eight.
 
 ---
@@ -92,10 +92,10 @@ at the top of every tab until you mark them read.
 | Symptom | Cause | Fix |
 |---|---|---|
 | Every feed reads "unreachable" | All three relays are down | SETUP → **Test relays**. Add a working one in the field below. |
-| Some feeds read "timed out" | Slow source | Normal. It is skipped and the sweep carries on. |
+| Some feeds read "timed out" | Slow source | Normal. It is skipped and the scan carries on. |
 | One feed reads "unreachable" | That address changed | Switch it off or replace it |
 | "All engines unavailable" | No key, or both rate limited | Check SETUP → Keys |
-| Headlines appear with no summary | Engines failed mid-sweep | Sweep again; headlines are kept either way |
+| Headlines appear with no summary | Engines failed mid-scan | Scan again; headlines are kept either way |
 | Nothing new found | Keywords too narrow | Widen a term in WATCH |
 
 ---
@@ -110,6 +110,6 @@ at the top of every tab until you mark them read.
 - **The repository is public.** Anyone with the address can open the app — they get an
   empty one with no keys, but they can read the file. Do not commit a keyword you would
   not want read, and never type a key into the file itself.
-- **No background refresh.** iOS does not permit it for home-screen apps. Sweeps run
+- **No background refresh.** iOS does not permit it for home-screen apps. Scans run
   when you open it. That matches the in-app-only alerts by design.
 - **Do not use Private Browsing** — it discards stored data on close.
