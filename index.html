@@ -112,6 +112,13 @@ h1::before{content:"";display:inline-block;width:8px;height:8px;background:var(-
 .vol-dot[data-zero="1"]{fill:var(--line)}
 .vol-val{fill:var(--mute);font-size:9px;font-weight:700;font-family:var(--body)}
 .vol-day{fill:var(--mute);font-size:9px;font-weight:600;font-family:var(--body)}
+.reg{margin:0 16px}
+.reg-row{display:block;padding:13px 14px;margin-bottom:8px;background:var(--surface);
+  border-radius:var(--r-sm);box-shadow:var(--shadow-sm);text-decoration:none;color:inherit}
+.reg-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:7px;font-size:10px;font-weight:600}
+.reg-date{font-family:var(--mono);font-size:10px;color:var(--mute)}
+.reg-hl{font-size:14px;font-weight:600;line-height:1.35;color:var(--text);letter-spacing:-.01em}
+.reg-meta{margin-top:6px;font-size:11px;color:var(--mute)}
 .tally{display:flex;align-items:center;gap:10px;margin:10px 16px 0;padding:10px 13px;background:var(--panel);border-radius:var(--r-sm);font-size:11px;color:var(--mute);line-height:1.4}
 .tally span{flex:1}
 .filters{display:flex;gap:7px;padding:14px 16px 4px;overflow-x:auto;
@@ -252,14 +259,15 @@ input::placeholder{color:var(--mute)}
 var PROVIDERS = {
   groq: {
     label: "Groq",
-    note: "Llama 3.3 70B. Around 30 requests a minute. Does not train on what you send.",
+    note: "GPT-OSS 120B. Around 30 requests a minute. Does not train on what you send.",
     hint: "gsk_…  from console.groq.com",
+    model: "openai/gpt-oss-120b",
     call: function (prompt, key) {
       return fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile", temperature: 0.2, max_tokens: 2000,
+          model: modelFor("groq"), temperature: 0.2, max_tokens: 2000,
           messages: [{ role: "user", content: prompt }]
         })
       }).then(readOpenAI);
@@ -267,10 +275,11 @@ var PROVIDERS = {
   },
   gemini: {
     label: "Google Gemini",
-    note: "Flash-Lite. Largest free daily allowance. Google may use free-tier inputs to improve its models.",
+    note: "Flash-Lite. Free with rate limits. Google may use free-tier inputs to improve its models. If this returns 404, the model was retired \u2014 change the model id below.",
     hint: "AIza…  from aistudio.google.com",
+    model: "gemini-3.1-flash-lite",
     call: function (prompt, key) {
-      return fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + encodeURIComponent(key), {
+      return fetch("https://generativelanguage.googleapis.com/v1beta/models/" + modelFor("gemini") + ":generateContent?key=" + encodeURIComponent(key), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -279,7 +288,7 @@ var PROVIDERS = {
         })
       }).then(function (r) {
         if (r.status === 429) throw rateErr();
-        if (!r.ok) throw new Error("HTTP " + r.status);
+        if (!r.ok) return apiError(r);
         return r.json();
       }).then(function (d) {
         var c = d.candidates && d.candidates[0];
@@ -291,12 +300,13 @@ var PROVIDERS = {
     label: "OpenRouter",
     note: "Free model pool. Around 20 requests a minute. Useful as a third leg.",
     hint: "sk-or-…  from openrouter.ai",
+    model: "openai/gpt-oss-120b:free",
     call: function (prompt, key) {
       return fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
         body: JSON.stringify({
-          model: "meta-llama/llama-3.3-70b-instruct:free", temperature: 0.2, max_tokens: 2000,
+          model: modelFor("openrouter"), temperature: 0.2, max_tokens: 2000,
           messages: [{ role: "user", content: prompt }]
         })
       }).then(readOpenAI);
@@ -306,22 +316,43 @@ var PROVIDERS = {
     label: "OpenAI",
     note: "GPT-4o mini. Needs its own API credit from platform.openai.com \u2014 a ChatGPT Plus subscription does NOT cover this.",
     hint: "sk-proj\u2026  from platform.openai.com",
+    model: "gpt-4o-mini",
     needsKey: true,
     call: function (prompt, key) {
       return fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
         body: JSON.stringify({
-          model: "gpt-4o-mini", temperature: 0.2, max_tokens: 2000,
+          model: modelFor("openai"), temperature: 0.2, max_tokens: 2000,
           messages: [{ role: "user", content: prompt }]
         })
       }).then(readOpenAI);
     }
   }
 };
+/* Providers retire model IDs without warning; an override keeps the app
+   usable without waiting for a new build. */
+function modelFor(p) {
+  return (S.models && S.models[p]) || (PROVIDERS[p] && PROVIDERS[p].model) || "";
+}
+
+/* Read the provider's own error text. A bare status code hid a model
+   decommissioning behind a generic "refused or rate limited". */
+function apiError(r) {
+  return r.text().then(function (body) {
+    var msg = "";
+    try {
+      var j = JSON.parse(body);
+      msg = (j.error && (j.error.message || j.error.code)) || j.message || "";
+    } catch (e) { msg = String(body || "").slice(0, 160); }
+    throw new Error(msg ? ("HTTP " + r.status + " — " + String(msg).slice(0, 200))
+                        : ("HTTP " + r.status));
+  }, function () { throw new Error("HTTP " + r.status); });
+}
+
 function readOpenAI(r) {
   if (r.status === 429) throw rateErr();
-  if (!r.ok) throw new Error("HTTP " + r.status);
+  if (!r.ok) return apiError(r);
   return r.json().then(function (d) {
     return (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "";
   });
@@ -400,7 +431,7 @@ var RECOMMENDED = [
   { term: "Indian Ocean", cat: "MARITIME" }
 ];
 
-var BUILD = "v24 · IST";
+var BUILD = "v27 · IST";
 
 var DEFAULT_RELAYS = [
   "https://corsproxy.io/?url=",
@@ -634,12 +665,13 @@ var S = {
   watch: SEED.map(function (s) { return { id: hash(s.term), term: s.term, cat: s.cat, alert: s.alert, on: true }; }),
   feeds: DEFAULT_FEEDS.slice(),
   keys: { groq: "", gemini: "", openrouter: "", openai: "" },
+  models: {},
   chain: ["groq", "gemini", "openrouter", "openai"],
   relays: DEFAULT_RELAYS.slice(),
   bestRelay: null,
   items: [], seen: [], lastScan: null, brief: "",
   engine: {}, feedState: {}, relayState: {}, feedAdd: "", tagging: "", lastSweepStats: null,
-  filterScroll: 0, showChart: true,
+  filterScroll: 0, showChart: true, trackTab: "SAT-WATCH", csvNote: "",
   briefSections: [], briefStatus: "",
   scanning: false, briefing: false, status: "", err: ""
 };
@@ -654,6 +686,7 @@ function load() {
       if (cfg.chain && cfg.chain.length) S.chain = cfg.chain;
       if (cfg.match) S.match = cfg.match;
       if (cfg.days) S.days = cfg.days;
+      if (cfg.models) S.models = cfg.models;
       if (typeof cfg.keepRead === "boolean") S.keepRead = cfg.keepRead;
       if (cfg.relays && cfg.relays.length) S.relays = cfg.relays;
       else if (cfg.proxy) S.relays = [cfg.proxy].concat(
@@ -675,7 +708,7 @@ function load() {
 function saveCfg() {
   try {
     localStorage.setItem("mw:config", JSON.stringify(
-      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, relays: S.relays, match: S.match, days: S.days, keepRead: S.keepRead }));
+      { watch: S.watch, feeds: S.feeds, keys: S.keys, chain: S.chain, relays: S.relays, match: S.match, days: S.days, keepRead: S.keepRead, models: S.models }));
   } catch (e) {}
 }
 function saveFeed() {
@@ -1185,8 +1218,20 @@ function sweep(onlyCat) {
     }).then(function () {
       if (S.lastSweepStats) S.lastSweepStats.offTopic = rejected;
       var merged = done.concat(S.items);
-      var keep = merged.filter(function (i) { return i.star; });
-      var rest = merged.filter(function (i) { return !i.star; }).slice(0, 150 - keep.length);
+      /* Saved items and the two tracked registers are exempt from the feed cap;
+         register entries age out at 12 months instead. */
+      var cutoff = Date.now() - PINNED_RETENTION_MS;
+      var keep = merged.filter(function (i) {
+        if (i.star) return true;
+        if (PINNED.indexOf(i.cat) > -1) {
+          var t = new Date(i.dt).getTime();
+          return !isFinite(t) || t >= cutoff;
+        }
+        return false;
+      });
+      var rest = merged.filter(function (i) {
+        return !i.star && PINNED.indexOf(i.cat) === -1;
+      }).slice(0, Math.max(40, 150 - keep.length));
       S.items = keep.concat(rest);
       S.lastScan = new Date().toISOString();
       S.scanning = false; setStatus(""); saveFeed(); render();
@@ -1276,7 +1321,17 @@ function summariseMissing() {
   }, Promise.resolve()).then(function () {
     var left = S.items.filter(function (i) { return !i.sum; }).length;
     S.scanning = false; setStatus("");
-    if (left) S.err = left + " item" + (left === 1 ? "" : "s") + " still unsummarised — the engine refused or rate limited. Try again shortly.";
+    if (left) {
+      var why = S.chain.filter(function (p) { return S.engine[p]; })
+        .map(function (p) { return (PROVIDERS[p] ? PROVIDERS[p].label : p) + ": " + S.engine[p]; })
+        .join(" · ");
+      var modelGone = S.chain.some(function (p) {
+        return /decommission|deprecat|unknown model|invalid model|not found/i.test(S.engine[p] || "");
+      });
+      S.err = left + " item" + (left === 1 ? "" : "s") + " still unsummarised. " +
+        (why || "No engine answered.") +
+        (modelGone ? "  A model has been retired by its provider — update the app to a current model ID." : "");
+    }
     saveFeed(); render();
   });
 }
@@ -1527,6 +1582,162 @@ function volumeChart(cat, opts) {
   return wrap;
 }
 
+/* ---------------------------- tracking packs ---------------------- */
+
+/* Two pinned categories. Items in these are retained for 12 months rather
+   than pruned with the rest of the feed, and are presented as registers. */
+var PINNED = ["SAT-WATCH", "ARMS-WATCH"];
+var PINNED_RETENTION_MS = 365 * 24 * 3600 * 1000;
+
+var PACKS = {
+  "SAT-WATCH": {
+    title: "Foreign satellite launches",
+    note: "China, Pakistan, Bangladesh, Turkey, USA \u2014 military and dual-use",
+    terms: [
+      "China satellite launch", "Long March launch", "Yaogan satellite", "Gaofen satellite",
+      "Chinese remote sensing satellite", "CASC launch", "Jilin satellite",
+      "Pakistan satellite launch", "PakSat", "SUPARCO satellite",
+      "Bangladesh satellite", "Bangabandhu satellite",
+      "Turkey satellite launch", "TURKSAT", "Gokturk satellite",
+      "US military satellite", "Space Force launch", "NRO launch", "USSF launch",
+      "reconnaissance satellite launch", "military communications satellite"
+    ]
+  },
+  "ARMS-WATCH": {
+    title: "PLA and Pakistan procurement",
+    note: "Contracts, inductions and indigenous development",
+    terms: [
+      "Pakistan defence procurement", "Pakistan Army induction", "Pakistan Air Force acquisition",
+      "Pakistan Navy warship", "Pakistan indigenous weapon", "Pakistan China arms deal",
+      "PLA procurement", "PLA induction", "China new weapon system",
+      "Chinese indigenous fighter", "Chinese warship commissioned",
+      "Norinco contract", "AVIC aircraft", "CASIC missile",
+      "JF-17", "J-35", "Type 054", "Hangor submarine", "VT-4 tank"
+    ]
+  }
+};
+
+var PACK_FEEDS = [
+  { name: "SpaceNews", url: "https://spacenews.com/feed/" },
+  { name: "NASASpaceflight", url: "https://www.nasaspaceflight.com/feed/" },
+  { name: "Defense News", url: "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml" },
+  { name: "Xinhua \u2014 via Google News", url: "https://news.google.com/rss/search?q=site:news.cn&hl=en-IN&gl=IN&ceid=IN:en" },
+  { name: "Anadolu \u2014 via Google News", url: "https://news.google.com/rss/search?q=site:aa.com.tr&hl=en-IN&gl=IN&ceid=IN:en" }
+];
+
+function packInstalled(cat) {
+  return S.watch.some(function (w) { return w.cat === cat; });
+}
+function installPack(cat) {
+  var p = PACKS[cat];
+  if (!p) return;
+  var have = {};
+  S.watch.forEach(function (w) { have[w.term.toLowerCase()] = 1; });
+  p.terms.forEach(function (t) {
+    if (have[t.toLowerCase()]) return;
+    S.watch.push({ id: hash(t + cat), term: t, cat: cat, alert: false, on: true });
+  });
+  var haveFeed = {};
+  S.feeds.forEach(function (f) { haveFeed[f.url] = 1; });
+  PACK_FEEDS.forEach(function (f) {
+    if (!haveFeed[f.url]) S.feeds.push({ id: hash(f.url), name: f.name, url: f.url, on: true });
+  });
+  saveCfg(); render();
+}
+
+/* ---------------------------- register fields --------------------- */
+
+var COUNTRY_PATTERNS = [
+  ["China",      ["china", "chinese", "pla", "beijing", "casc", "cnsa", "norinco", "avic", "casic"]],
+  ["Pakistan",   ["pakistan", "pakistani", "islamabad", "suparco", "ispr", "paksat"]],
+  ["Bangladesh", ["bangladesh", "bangladeshi", "dhaka", "bangabandhu"]],
+  ["Turkey",     ["turkey", "turkish", "ankara", "turksat", "gokturk", "aselsan", "baykar", "tusas"]],
+  ["USA",        ["united states", "u.s.", "us space force", "space force", "pentagon", "nro", "spacex", "ussf"]],
+  ["Russia",     ["russia", "russian", "roscosmos"]],
+  ["India",      ["india", "indian", "isro", "drdo", "hal"]]
+];
+
+function detectCountry(text) {
+  var t = " " + String(text || "").toLowerCase() + " ";
+  var hits = [];
+  COUNTRY_PATTERNS.forEach(function (p) {
+    if (p[1].some(function (k) { return t.indexOf(k) > -1; })) hits.push(p[0]);
+  });
+  return hits.length ? hits.slice(0, 2).join(", ") : "\u2014";
+}
+
+var VEHICLES = ["long march", "falcon 9", "falcon heavy", "electron", "vulcan", "atlas v",
+  "delta iv", "gslv", "pslv", "soyuz", "ariane", "h-iia", "h3", "shavit", "simorgh", "kuaizhou"];
+
+function detectVehicle(text) {
+  var t = String(text || "").toLowerCase();
+  for (var i = 0; i < VEHICLES.length; i++) {
+    if (t.indexOf(VEHICLES[i]) > -1) {
+      return VEHICLES[i].replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    }
+  }
+  return "\u2014";
+}
+
+/* Quantity and value are read only where explicitly written. Nothing is
+   estimated; a blank field means the source did not state it. */
+function detectQuantity(text) {
+  /* The leading group prevents a type designation being read as a quantity:
+     in "40 J-35 fighters" the number is 40, not the 35 in J-35. */
+  var m = String(text || "").match(/(^|[\s(,;])(\d{1,4})\s+(aircraft|jets|fighters|tanks|ships|submarines|vessels|missiles|systems|units|helicopters|drones|guns|howitzers)\b/i);
+  return m ? (m[2] + " " + m[3].toLowerCase()) : "\u2014";
+}
+function detectValue(text) {
+  var s = String(text || "");
+  var m = s.match(/(?:\$|USD\s?|Rs\.?\s?|\u20b9)\s?([\d,.]+)\s?(billion|million|crore|lakh|bn|mn)?/i);
+  if (!m) return "\u2014";
+  return (m[0] || "").trim().replace(/\s+/g, " ");
+}
+function detectStatus(text) {
+  var t = String(text || "").toLowerCase();
+  if (/\b(commission|inducted|induction|delivered|handed over|entered service)\b/.test(t)) return "In service";
+  if (/\b(contract|signed|awarded|order placed|deal signed)\b/.test(t)) return "Contracted";
+  if (/\b(launch|launches|launched|lift off|lifted off|placed in orbit|orbited|in orbit)\b/.test(t)) return "Launched";
+  if (/\b(approved|cleared|greenlit|sanction)\b/.test(t)) return "Approved";
+  if (/\b(plan|propose|intends|talks|negotiat|mou|interest)\b/.test(t)) return "Reported intent";
+  return "Reported";
+}
+
+function registerRows(cat) {
+  return S.items.filter(function (i) { return i.cat === cat; })
+    .sort(function (a, b) { return String(b.dt).localeCompare(String(a.dt)); })
+    .map(function (i) {
+      var blob = i.hl + " " + (i.desc || "") + " " + (i.sum || "");
+      var row = {
+        date: dayStamp(i.dt),
+        country: detectCountry(blob),
+        headline: i.hl,
+        status: detectStatus(blob),
+        source: i.src,
+        grade: i.grd,
+        url: i.url,
+        id: i.id
+      };
+      if (cat === "SAT-WATCH") row.vehicle = detectVehicle(blob);
+      else { row.qty = detectQuantity(blob); row.value = detectValue(blob); }
+      return row;
+    });
+}
+
+function toCSV(cat) {
+  var rows = registerRows(cat);
+  var cols = cat === "SAT-WATCH"
+    ? ["date", "country", "vehicle", "status", "headline", "source", "grade", "url"]
+    : ["date", "country", "qty", "value", "status", "headline", "source", "grade", "url"];
+  var esc = function (v) {
+    v = String(v === undefined ? "" : v).replace(/"/g, '""');
+    return '"' + v + '"';
+  };
+  var out = [cols.map(function (c) { return esc(c.toUpperCase()); }).join(",")];
+  rows.forEach(function (r) { out.push(cols.map(function (c) { return esc(r[c]); }).join(",")); });
+  return out.join("\r\n");
+}
+
 /* ---------------------------- render ------------------------------ */
 
 function unseenItems() {
@@ -1593,6 +1804,7 @@ function render() {
   /* header */
   var tabs = el("nav", { class: "tabs" });
   [["feed","Feed",S.items.length],["brief","Brief",0],
+   ["track","Track",S.items.filter(function(i){return PINNED.indexOf(i.cat)>-1;}).length],
    ["watch","Watch",S.watch.filter(function(w){return w.on;}).length],["setup","Setup",0]].forEach(function (t) {
     tabs.appendChild(el("button", { class: "tab", "data-on": S.tab === t[0] ? "1" : "0",
       on: { click: function () { S.tab = t[0]; render(); window.scrollTo(0, 0); } } },
@@ -1627,6 +1839,7 @@ function render() {
   if (S.tab === "feed") renderFeed(app);
   if (S.tab === "watch") renderWatch(app);
   if (S.tab === "brief") renderBrief(app);
+  if (S.tab === "track") renderTrack(app);
   if (S.tab === "setup") renderSetup(app);
 }
 
@@ -1760,6 +1973,98 @@ function renderTimeline(app, list) {
   app.appendChild(wrap);
   app.appendChild(el("div", { class: "legend", text:
     "Times are India Standard Time. Tap any line to open the source." }));
+}
+
+function renderTrack(app) {
+  var active = S.trackTab || "SAT-WATCH";
+
+  var bar = el("div", { class: "viewbar" });
+  var grp = el("div", { class: "grp" });
+  PINNED.forEach(function (c) {
+    grp.appendChild(el("button", { class: "seg", "data-on": active === c ? "1" : "0",
+      text: c === "SAT-WATCH" ? "Satellites" : "Procurement",
+      on: { click: function () { S.trackTab = c; render(); } } }));
+  });
+  bar.appendChild(grp);
+  app.appendChild(bar);
+
+  var pack = PACKS[active];
+  var existing = S.items.filter(function (i) { return i.cat === active; }).length;
+  /* Only take over the tab when there is genuinely nothing to show — entries
+     can arrive in these categories from the user's own keywords too. */
+  if (!packInstalled(active) && !existing) {
+    app.appendChild(el("div", { class: "empty" },
+      el("b", { text: pack.title }),
+      pack.note + ". Installing adds " + pack.terms.length +
+      " keywords and five specialist sources to your watchlist. Nothing existing is removed.",
+      el("div", { class: "add", style: "margin-top:16px;justify-content:center" },
+        el("button", { class: "addbtn", text: "Install tracking pack",
+          on: { click: function () { installPack(active); } } }))));
+    return;
+  }
+
+  var rows = registerRows(active);
+  app.appendChild(el("div", { class: "sec" },
+    el("div", { class: "sec-h" },
+      el("span", { class: "sec-t", text: pack.title }),
+      el("span", { class: "tag", text: rows.length + (rows.length === 1 ? " entry" : " entries") })),
+    el("div", { class: "hint", style: "margin-top:0", text: pack.note +
+      ". Entries are kept for 12 months. Fields are read from the reporting itself \u2014 a dash means the source did not state it, not that the value is zero." }),
+    el("div", { class: "add" },
+      el("button", { class: "addbtn", text: "Copy CSV", on: { click: function () { copyCSV(active); } } }),
+      el("button", { class: "addbtn", text: "Scan now", disabled: S.scanning,
+        on: { click: function () { if (!S.scanning) sweep(active); } } })),
+    S.csvNote ? el("div", { class: "hint", text: S.csvNote }) : null));
+
+  if (!packInstalled(active)) {
+    app.appendChild(el("div", { class: "alert" },
+      el("span", { class: "dot" }),
+      el("span", { class: "alert-t", text: "Tracking pack not installed" }),
+      el("button", { class: "link", text: "Install",
+        on: { click: function () { installPack(active); } } })));
+  }
+  if (!rows.length) {
+    app.appendChild(el("div", { class: "empty" },
+      el("b", { text: "No entries yet" }),
+      "Run a scan and matching reports will be registered here."));
+    return;
+  }
+
+  var tbl = el("div", { class: "reg" });
+  rows.forEach(function (r) {
+    var meta = [r.country, r.status];
+    if (active === "SAT-WATCH") { if (r.vehicle !== "\u2014") meta.push(r.vehicle); }
+    else {
+      if (r.qty !== "\u2014") meta.push(r.qty);
+      if (r.value !== "\u2014") meta.push(r.value);
+    }
+    tbl.appendChild(el("a", { class: "reg-row", href: r.url || "#", target: "_blank", rel: "noreferrer" },
+      el("div", { class: "reg-top" },
+        el("span", { class: "reg-date", text: r.date }),
+        el("span", { class: "tag cat", text: r.country }),
+        el("span", { class: "tag", text: r.status }),
+        el("span", { class: "grade", text: r.grade })),
+      el("div", { class: "reg-hl", text: r.headline }),
+      el("div", { class: "reg-meta", text: meta.filter(function (m) { return m && m !== "\u2014"; }).join("  \u00b7  ") + "  \u00b7  " + r.source })));
+  });
+  app.appendChild(tbl);
+}
+
+function copyCSV(cat) {
+  var csv = toCSV(cat);
+  function done(ok) {
+    S.csvNote = ok
+      ? "CSV copied \u2014 paste into a spreadsheet."
+      : "Could not copy automatically. Long-press to select the text file instead.";
+    render();
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(csv).then(function () { done(true); }, function () { done(false); });
+      return;
+    }
+  } catch (e) { /* fall through */ }
+  done(false);
 }
 
 function renderWatch(app) {
@@ -1960,12 +2265,22 @@ function renderSetup(app) {
     el("div", { class: "sec-h" }, el("span", { class: "sec-t", text: "Keys" })));
   keysList.forEach(function (p) {
     var inp = el("input", { class: "mono", type: "password", placeholder: PROVIDERS[p].hint });
-    inp.value = S.keys[p] || "";
-    inp.addEventListener("input", function () { S.keys[p] = inp.value.trim(); saveCfg(); });
-    ksec.appendChild(el("div", { style: "margin-bottom:16px" },
-      el("span", { class: "lbl", text: PROVIDERS[p].label }),
-      inp,
-      el("div", { class: "hint", text: PROVIDERS[p].note })));
+          inp.value = S.keys[p] || "";
+      inp.addEventListener("input", function () { S.keys[p] = inp.value.trim(); saveCfg(); });
+      var mid = el("input", { class: "mono", placeholder: PROVIDERS[p].model || "model id" });
+      mid.value = (S.models && S.models[p]) || "";
+      mid.addEventListener("input", function () {
+        S.models = S.models || {};
+        var v = mid.value.trim();
+        if (v) S.models[p] = v; else delete S.models[p];
+        saveCfg();
+      });
+      ksec.appendChild(el("div", { style: "margin-bottom:16px" },
+        el("span", { class: "lbl", text: PROVIDERS[p].label }),
+        inp,
+        el("span", { class: "lbl", text: "Model \u2014 leave blank for " + (PROVIDERS[p].model || "default") }),
+        mid,
+        el("div", { class: "hint", text: PROVIDERS[p].note })));
   });
   ksec.appendChild(el("div", { class: "hint warn", text:
     "Keys are stored in this browser on this device only. That is not a secure keychain — rotate them if the phone is ever out of your hands." }));
